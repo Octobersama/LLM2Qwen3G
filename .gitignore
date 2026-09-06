@@ -7,7 +7,7 @@
 # 研究过程原始材料（已核对的源码快照/原始文档）
 _research/
 
-# 临时构建产物（dist/ 下的发布二进制单独提交）
-gateway.exe
-gateway
-gateway.exe.tmp
+# 根目录下的临时构建产物（带前导斜杠，避免误伤 cmd/gateway/ 源码目录；dist/ 发布二进制单独提交）
+/gateway
+/gateway.exe
+/gateway.exe.tmp

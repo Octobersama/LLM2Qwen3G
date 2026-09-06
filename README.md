@@ -35,8 +35,6 @@ PowerShell 用 `$env:UPSTREAM_BASE_URL="..."`（完整示例见下文「本机�
 
 健康检查：`GET /healthz`
 
-> 网关不读取 `.env` 文件本身——`cp` 只是模板；用 shell 导出环境变量或用 `env $(cat .env | xargs)` 方式注入（见下文部署示例）。
-
 ## 预编译二进制（dist/）
 
 | 文件 | 平台 |
