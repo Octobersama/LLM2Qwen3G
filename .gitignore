@@ -1,0 +1,13 @@
+# 用户本地敏感文件（含真实 API key），不得入库
+测试api key信息.txt
+
+# 运行时本地配置
+.env
+
+# 研究过程原始材料（已核对的源码快照/原始文档）
+_research/
+
+# 临时构建产物（dist/ 下的发布二进制单独提交）
+gateway.exe
+gateway
+gateway.exe.tmp
