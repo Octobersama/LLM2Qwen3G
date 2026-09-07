@@ -127,7 +127,26 @@ curl -s http://127.0.0.1:8080/healthz
 journalctl -u llm2qwen3guard -f
 ```
 
-sub2api 侧把审计节点 Base URL 填 `http://<服务器IP>:8080/v1`（建议仅监听 127.0.0.1 并由反向代理/Nginx 加 TLS 与访问控制后暴露，或配 `GATEWAY_API_KEY` 鉴权）。
+## Docker 部署（推荐给其他用户）
+
+仓库自带 `Dockerfile`（多阶段构建：`golang:1.25-alpine` 编译 → `distroless/static-debian12:nonroot` 运行，含 CA 证书供 HTTPS 上游、内置非 root 用户）与 `docker-compose.yml`（健康检查、`read_only`、`cap_drop: ALL`、`no-new-privileges`）。本机无 Docker 环境，以下为标准 compose 流程，未在本仓库实测；遇到问题请提 issue。
+
+```bash
+git clone https://github.com/Octobersama/LLM2Qwen3G.git && cd LLM2Qwen3G
+cp .env.docker.example .env    # 填上游配置（必填：UPSTREAM_BASE_URL / UPSTREAM_API_KEY / UPSTREAM_MODEL）
+docker compose up -d           # 构建并启动
+docker compose ps              # 预期健康状态为 healthy
+curl http://127.0.0.1:8080/healthz
+docker compose logs -f         # 每请求一行：upstream_mode/latency/outcome
+```
+
+要点：
+
+- 镜像内**不含任何凭据**；配置全部经 `.env`（compose `env_file`）注入，`.env` 已被 gitignore，切勿提交
+- 默认只绑定宿主 `127.0.0.1:8080`，假定由同机 Nginx/Caddy 反代加 TLS 暴露；若直接对外，改 ports 为 `"8080:8080"` 并**务必**设置 `GATEWAY_API_KEY`
+- 健康探针是网关内置的 `-healthcheck`（GET 自身 /healthz，已单测覆盖），distroless 镜像无 shell/curl 也能用
+- 更新：`git pull && docker compose up -d --build`
+- sub2api 侧把审计节点 Base URL 填 `http://<宿主IP>:8080/v1`（建议仅监听 127.0.0.1 并由反向代理加 TLS 与访问控制后暴露，或配 `GATEWAY_API_KEY` 鉴权）
 
 ## 对接 sub2api
 

@@ -39,6 +39,7 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 | `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE |
 | （无 dist/） | 二进制不入库；经 [GitHub Releases](https://github.com/Octobersama/LLM2Qwen3G/releases) 分发（v0.1.1+），本地构建走 `-buildvcs=false` |
 | `_research/` | gitignore 的调研原始快照（sub2api 源码、智谱 OpenAPI、HF chat_template）——勿删勿提交 |
+| `Dockerfile` + `docker-compose.yml` + `.env.docker.example` + `.dockerignore` | 容器部署（多阶段：golang:1.25-alpine 构建 → distroless/static:nonroot 运行；compose 注入 env_file，健康探针用内置 `-healthcheck`——distroless 无 shell，不能改用 curl/wget；`.dockerignore` 防敏感文件入构建上下文）；本机无 Docker，未实测 |
 | `DESIGN.md` | 带出处的协议合同（改动协议前必读） |
 
 ## Development Commands

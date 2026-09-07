@@ -1,0 +1,33 @@
+# LLM2Qwen3Guard — Docker Compose 部署
+#
+# 用法：
+#   1. 复制本目录中的 .env.docker.example 为 .env 并填写上游配置
+#   2. docker compose up -d
+#   3. 健康检查：curl http://127.0.0.1:8080/healthz
+#
+# 网关读取环境变量（不读取 .env 文件本身）；compose 通过 env_file 注入。
+services:
+  llm2qwen3guard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llm2qwen3guard:latest
+    container_name: llm2qwen3guard
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    # 只绑定 127.0.0.1：默认假定由同机反代（Nginx/Caddy，负责 TLS 与访问控制）
+    # 暴露给外部。若需直接对外，改为 "8080:8080" 并务必设置 GATEWAY_API_KEY。
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/llm2qwen3guard", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    # 与 README 的 systemd 加固对齐的容器级限制
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

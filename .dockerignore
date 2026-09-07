@@ -1,0 +1,11 @@
+# 构建上下文最小化 + 防止本地敏感文件进入镜像构建上下文
+# （Dockerfile 只 COPY go.mod / cmd/ / internal/，以下条目是双保险）
+.git
+.env
+.env.docker.example
+测试api key信息.txt
+_research/
+dist/
+*.exe
+gateway
+*.md
