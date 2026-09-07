@@ -8,8 +8,9 @@ import (
 	"strings"
 )
 
-// Config contains gateway runtime settings. Environment names and defaults are
-// defined by DESIGN.md section 4/5.
+// Config contains gateway runtime settings. The authoritative env-var table
+// (names, defaults, required trio) is README.md's 配置 section and
+// .env.example; FromEnv below is the executable form of that table.
 type Config struct {
 	ListenAddr           string
 	UpstreamBaseURL      string

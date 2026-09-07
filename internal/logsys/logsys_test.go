@@ -32,6 +32,13 @@ func TestLoggerStdoutOnly(t *testing.T) {
 	l.Close()
 }
 
+func TestNewDiscardIsSilent(t *testing.T) {
+	l := NewDiscard()
+	// ERROR-level events must also be swallowed (failure-path test noise).
+	l.Errorf("audit_failed", map[string]any{"status": 503})
+	l.Infof("audit", nil)
+}
+
 func TestLoggerFileSinkAndRotationFields(t *testing.T) {
 	dir := t.TempDir()
 	l, err := New(dir, "debug")
@@ -63,6 +70,27 @@ func TestLoggerFileSinkAndRotationFields(t *testing.T) {
 	}
 	if key, _ := rec.Fields["api_key"].(string); strings.Contains(key, "6529") || !strings.Contains(key, "…") {
 		t.Fatalf("api_key not redacted: %q", key)
+	}
+}
+
+func TestStdoutFieldOrderDeterministic(t *testing.T) {
+	// Two loggers with identical events must render byte-identical stdout
+	// lines despite map iteration order being random.
+	var a, b strings.Builder
+	for _, w := range []*strings.Builder{&a, &b} {
+		l := &Logger{stdout: w, minLevel: LevelInfo}
+		l.Infof("audit", map[string]any{
+			"request_id": "r1", "model": "m", "safety": "Safe",
+			"categories": "", "api_key": "sk-xxxx…yyyy", "mode": "json_schema",
+			"status": 200, "latency_ms": 12, "stream": false, "base_url": "u",
+			"text_chars": 3,
+		})
+	}
+	if a.String() == "" || a.String() != b.String() {
+		t.Fatalf("stdout lines not deterministic:\n%q\n%q", a.String(), b.String())
+	}
+	if !strings.Contains(a.String(), "api_key=sk-xxxx…yyyy base_url=u") {
+		t.Fatalf("fields not sorted: %q", a.String())
 	}
 }
 

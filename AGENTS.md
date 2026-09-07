@@ -36,7 +36,7 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 | `cmd/gateway/` | main：装配 config + server，优雅关停 |
 | `internal/config/` | 环境变量解析与**启动期全量校验**（FromEnv + envInt/envFloat/envOr） |
 | `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE/审计日志事件 |
-| `internal/logsys/` | 双通道结构化日志（stdout + 按日轮转 JSONL 文件）、API key 脱敏 `Redact`、日志字段白名单在此强制 |
+| `internal/logsys/` | 双通道结构化日志（stdout + 按日轮转 JSONL 文件）、API key 脱敏 `Redact`、stdout 字段按 key 排序保证确定性；**注意**：logsys 是通用 sink 不做字段过滤——审计事件字段白名单是 server 层合同（见 logsys 包注释与 DESIGN.md §4） |
 | （无 dist/） | 二进制不入库；经 [GitHub Releases](https://github.com/Octobersama/LLM2Qwen3G/releases) 分发（v0.1.1+），本地构建走 `-buildvcs=false` |
 | `_research/` | gitignore 的调研原始快照（sub2api 源码、智谱 OpenAPI、HF chat_template）——勿删勿提交 |
 | `Dockerfile` + `docker-compose.yml` + `.env.docker.example` + `.dockerignore` | 容器部署（多阶段：golang:1.25-alpine 构建 → distroless/static:nonroot 运行；compose 注入 env_file，健康探针用内置 `-healthcheck`——distroless 无 shell，不能改用 curl/wget；`.dockerignore` 防敏感文件入构建上下文）；本机无 Docker，未实测 |
@@ -86,7 +86,7 @@ gofmt 是唯一格式器：提交前 `gofmt -l .` 必须为空。
 
 - **Go 1.25**（`go.mod`），**零第三方依赖**——新功能优先 stdlib；引入依赖需极强理由。
 - 开发机 Windows（PowerShell：`$env:VAR="..."`），生产 Linux amd64（systemd + EnvironmentFile）；无 Python/Node 参与。
-- 日志走 stderr `log.Printf`（每请求一行：upstream_mode/latency/outcome）。
+- 日志走 `internal/logsys` 双通道：stdout 结构化行（字段按 key 排序）+ 可选按日轮转 JSONL（`LOG_DIR`，默认 logs，off 关闭）；main 里仅剩启动/关停的少量 `log.Printf` 走 stderr。
 
 ## Testing & QA
 
@@ -96,7 +96,7 @@ gofmt 是唯一格式器：提交前 `gofmt -l .` 必须为空。
   - `sub2api_compat_test.go`：**刻意逐字镜像** sub2api 的 ParseQwen3Guard 做 Render 往返验证——是兼容性证据，勿当重复代码删除；上游 sub2api 变更时需手工同步
   - `upstream_test.go`：降级顺序（位置断言 bodies[0]/bodies[1]）、strict 显式开启才发送、401/429/5xx 不降级、endpointURL 保路径
   - `server_test.go`：端到端、SSE 4 帧计数+stop 帧、失败策略三态、413（注入小上限，勿分配 1MiB+ 大 body）
-- 已知未覆盖（改动相关区域时补）：`internal/config` 无测试（枚举/数值校验）、`server.New` 生产构造、`/healthz` 路由、流式下的失败策略、usage 透传断言。
+- 已知未覆盖（改动相关区域时补）：`server.New` 生产构造（nil logger 分支）、`/healthz` 路由、流式下的失败策略、usage 透传断言。（`internal/config` 已有全分支测试 `config_test.go`——必填/枚举/边界/appendix fail-fast/LOG_DIR）
 
 ## 提交纪律
 

@@ -30,8 +30,9 @@ type Handler struct {
 	log      *logsys.Logger
 }
 
-// New creates a gateway HTTP handler from validated configuration. The logger
-// may be nil (logging disabled); New installs a stdout-only logger otherwise.
+// New creates a gateway HTTP handler from validated configuration. A nil
+// logger installs a stdout-only info-level default (NOT "logging disabled");
+// tests should pass logsys.New("", "error") to silence info noise.
 func New(cfg config.Config, lg *logsys.Logger) *Handler {
 	if lg == nil {
 		lg, _ = logsys.New("", "info")
@@ -88,20 +89,19 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		"api_key":    logsys.Redact(h.cfg.UpstreamAPIKey),
 		"stream":     false,
 	}
-	upstreamMode, verdict := "", ""
+	upstreamMode, safety, categories := "", "", ""
 	defer func() {
 		fields["mode"] = upstreamMode
 		fields["latency_ms"] = time.Since(start).Milliseconds()
-		if verdict != "" {
-			fields["safety"], fields["categories"] = splitVerdict(verdict)
+		if safety != "" {
+			fields["safety"], fields["categories"] = safety, categories
 			h.log.Infof("audit", fields)
 		} else {
 			h.log.Errorf("audit_failed", fields)
 		}
 	}()
 	if h.cfg.GatewayAPIKey != "" && r.Header.Get("Authorization") != "Bearer "+h.cfg.GatewayAPIKey {
-		fields["status"] = 401
-		writeAPIError(w, http.StatusUnauthorized, "invalid gateway api key")
+		h.respondError(w, fields, http.StatusUnauthorized, "invalid gateway api key")
 		return
 	}
 	// Bound the request body before decoding: MAX_INPUT_CHARS bounds the
@@ -115,24 +115,20 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(&req); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			fields["status"] = 413
-			writeAPIError(w, http.StatusRequestEntityTooLarge, "request body exceeds limit")
+			h.respondError(w, fields, http.StatusRequestEntityTooLarge, "request body exceeds limit")
 			return
 		}
-		fields["status"] = 400
-		writeAPIError(w, http.StatusBadRequest, "invalid request body")
+		h.respondError(w, fields, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	fields["stream"] = req.Stream
 	if len(req.Messages) == 0 {
-		fields["status"] = 400
-		writeAPIError(w, http.StatusBadRequest, "messages must not be empty")
+		h.respondError(w, fields, http.StatusBadRequest, "messages must not be empty")
 		return
 	}
 	text, err := qwen3guard.ExtractAuditText(req.Messages)
 	if err != nil {
-		fields["status"] = 400
-		writeAPIError(w, http.StatusBadRequest, err.Error())
+		h.respondError(w, fields, http.StatusBadRequest, err.Error())
 		return
 	}
 	if h.cfg.MaxInputChars > 0 {
@@ -145,7 +141,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	fields["text_chars"] = len([]rune(text))
 	content, usage, upstreamMode, err := h.upstream.Do(r.Context(), upstream.AuditRequest{Text: text})
 	if err != nil {
-		h.failure(w, err, req.Stream, fields)
+		h.failure(w, err, req.Stream, fields, reqID)
 		return
 	}
 	v, err := qwen3guard.ParseUpstreamJSON(content)
@@ -153,47 +149,49 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		v, err = qwen3guard.ValidateVerdict(v)
 	}
 	if err != nil {
-		h.failure(w, err, req.Stream, fields)
+		h.failure(w, err, req.Stream, fields, reqID)
 		return
 	}
 	fields["status"] = 200
-	verdict = v.Safety + "/" + strings.Join(v.Categories, ",")
+	safety, categories = v.Safety, strings.Join(v.Categories, ",")
 	h.writeCompletion(w, req.Stream, qwen3guard.Render(v.Safety, v.Categories), usage, reqID)
 }
 
-// splitVerdict decomposes "Safety/Cat1,Cat2" for structured logging.
-func splitVerdict(v string) (string, string) {
-	if i := strings.IndexByte(v, '/'); i >= 0 {
-		return v[:i], v[i+1:]
-	}
-	return v, ""
-}
-func (h *Handler) failure(w http.ResponseWriter, cause error, stream bool, fields map[string]any) {
+// failure applies FAILURE_POLICY for upstream/parse/validation errors.
+func (h *Handler) failure(w http.ResponseWriter, cause error, stream bool, fields map[string]any, reqID string) {
 	if h.cfg.FailurePolicy == "safe" {
 		fields["status"], fields["safety"] = 200, "Safe"
-		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetySafe, nil), nil, fields["request_id"].(string))
+		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetySafe, nil), nil, reqID)
 		return
 	}
 	if h.cfg.FailurePolicy == "unsafe" {
 		fields["status"], fields["safety"] = 200, "Unsafe"
-		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetyUnsafe, nil), nil, fields["request_id"].(string))
+		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetyUnsafe, nil), nil, reqID)
 		return
 	}
 	// Stable generic message only: the underlying error can embed the raw
 	// upstream response body (UpstreamError.Err), which must never reach the
 	// caller (project non-goal: no upstream JSON/explanations to sub2api).
 	// Details stay in the structured log via audit_failed fields.
-	fields["status"] = 503
-	writeAPIError(w, http.StatusServiceUnavailable, "guard pipeline failure")
+	h.respondError(w, fields, http.StatusServiceUnavailable, "guard pipeline failure")
+}
+
+// respondError records the response status into the audit fields and writes
+// the API error envelope — every error exit path goes through here so the
+// structured log can never miss a status.
+func (h *Handler) respondError(w http.ResponseWriter, fields map[string]any, status int, message string) {
+	fields["status"] = status
+	writeAPIError(w, status, message)
 }
 func (h *Handler) writeCompletion(w http.ResponseWriter, stream bool, content string, usage json.RawMessage, id string) {
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		// Standard OpenAI stream shape: role delta, content delta, then a
-		// terminal chunk with finish_reason "stop" (sub2api's OpenAI clients
-		// expect the stop marker to terminate a stream).
+		// OpenAI streaming contract: role delta, content delta, then a
+		// terminal empty-delta chunk with finish_reason "stop", ending with
+		// the sentinel "data: [DONE]" line
+		// (https://platform.openai.com/docs/api-reference/chat/streaming).
 		frames := []map[string]any{
 			{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}}},
 			{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": content}, "finish_reason": nil}}},
