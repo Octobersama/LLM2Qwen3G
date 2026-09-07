@@ -32,7 +32,8 @@ type Handler struct {
 
 // New creates a gateway HTTP handler from validated configuration. A nil
 // logger installs a stdout-only info-level default (NOT "logging disabled");
-// tests should pass logsys.New("", "error") to silence info noise.
+// tests should pass logsys.NewDiscard() — level filtering alone still
+// prints ERROR-level audit_failed events.
 func New(cfg config.Config, lg *logsys.Logger) *Handler {
 	if lg == nil {
 		lg, _ = logsys.New("", "info")
