@@ -76,7 +76,7 @@ Refusal: Yes
 
 ### 1.6 运营者审查侧重附录（AUDIT_POLICY_APPEND_FILE）
 
-`AUDIT_POLICY_APPEND_FILE` 指向文本文件，内容作为「Additional audit focus」插入 §1.5 结构的第 2 部分（官方政策定义）与第 3 部分（JSON 输出指令）**之间**；JSON 指令固定末尾，appendix 无法顶掉。语义边界：appendix 是任意运营者文本，**可改变判定侧重与宽严**（既可能收紧也可能放宽），但**不能改变对外合同**——safety 枚举与官方 9 类目由本地 `ValidateVerdict` 强制（§3.2 第 3 条），越界输出判无效走失败策略。文件缺失/不可读 → 启动失败（fail-fast）。示例见 `policy-appendix.example.txt`。
+`AUDIT_POLICY_APPEND_FILE` 指向文本文件（Markdown），内容作为「Additional audit focus」插入 §1.5 结构的第 2 部分（官方政策定义）与第 3 部分（JSON 输出指令）**之间**；JSON 指令固定末尾，appendix 无法顶掉。语义边界：appendix 是任意运营者文本，**可改变判定侧重与宽严**（既可能收紧也可能放宽），但**不能改变对外合同**——safety 枚举与官方 9 类目由本地 `ValidateVerdict` 强制（§3.2 第 3 条），越界输出判无效走失败策略。文件缺失/不可读 → 启动失败（fail-fast）。示例见 `policy-appendix.example.md`。
 
 ---
 
