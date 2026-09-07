@@ -47,9 +47,9 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 go run ./cmd/gateway          # 本地运行（需环境变量，见 .env.example；网关不读取 .env 文件本身）
 go vet ./... && go test ./... # 静态检查 + 全量测试（改代码后必跑）
 
-# 发布二进制（提交进 dist/）
-GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/gateway-windows-amd64.exe ./cmd/gateway
-GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/gateway-linux-amd64   ./cmd/gateway
+# 发布二进制（提交进 dist/；-buildvcs=false 保证可复现）
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-windows-amd64.exe ./cmd/gateway
+GOOS=linux   GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-linux-amd64   ./cmd/gateway
 
 # 冒烟探测
 curl -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" \

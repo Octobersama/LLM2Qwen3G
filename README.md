@@ -42,7 +42,7 @@ PowerShell 用 `$env:UPSTREAM_BASE_URL="..."`（完整示例见下文「本机�
 | `dist/gateway-windows-amd64.exe` | Windows x64 |
 | `dist/gateway-linux-amd64` | Linux x64 |
 
-自行构建：`GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/gateway-linux-amd64 ./cmd/gateway`
+自行构建：`GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-linux-amd64 ./cmd/gateway`（`-buildvcs=false` 保证可复现构建，产物不随 git 状态变化）
 
 ## 本机测试（Windows）
 
