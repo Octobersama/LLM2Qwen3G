@@ -67,7 +67,10 @@ curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: app
 # 1. 下载二进制
 sudo install -m 755 gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
 
-# 2. 配置（/etc/llm2qwen3guard.env，权限 600，切勿提交到仓库）
+# 2. 专用系统用户（服务以非 root 运行；监听 127.0.0.1:8080 无需特权端口）
+sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin llm2qwen3guard
+
+# 3. 配置（/etc/llm2qwen3guard.env，权限 600 属 root，服务经 systemd EnvironmentFile 读取）
 sudo tee /etc/llm2qwen3guard.env >/dev/null <<'EOF'
 LISTEN_ADDR=127.0.0.1:8080
 UPSTREAM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
@@ -80,21 +83,29 @@ FAILURE_POLICY=error
 EOF
 sudo chmod 600 /etc/llm2qwen3guard.env
 
-# 3. systemd 服务
+# 4. systemd 服务（非 root + 加固）
 sudo tee /etc/systemd/system/llm2qwen3guard.service >/dev/null <<'EOF'
 [Unit]
 Description=LLM2Qwen3Guard gateway
 After=network-online.target
 
 [Service]
+User=llm2qwen3guard
+Group=llm2qwen3guard
 EnvironmentFile=/etc/llm2qwen3guard.env
 ExecStart=/usr/local/bin/llm2qwen3guard
 Restart=on-failure
 RestartSec=3
-# 加固
+# 加固：无新特权 / 只读文件系统（可写 /tmp 独立挂载）/ 私有 tmp / 禁止设备与内核指针访问
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
@@ -102,7 +113,7 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now llm2qwen3guard
 
-# 4. 验证
+# 5. 验证
 curl -s http://127.0.0.1:8080/healthz
 journalctl -u llm2qwen3guard -f
 ```
