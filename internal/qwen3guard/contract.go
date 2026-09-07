@@ -9,18 +9,22 @@ import (
 )
 
 // Safety levels are the exact Qwen3Guard-Gen output tokens. Source: QwenLM/Qwen3Guard
-// README regex and the CT-8B chat_template (URLs documented in DESIGN.md section 1.1).
+// README quickstart regex r"Safety: (Safe|Unsafe|Controversial)"
+// (https://github.com/QwenLM/Qwen3Guard) and the chat template in
+// https://huggingface.co/Qwen/Qwen3Guard-Gen-8B/raw/main/tokenizer_config.json
+// ("The first line must be one of: 'Safety: Safe', 'Safety: Unsafe', 'Safety: Controversial'.").
 const (
 	SafetySafe          = "Safe"
 	SafetyUnsafe        = "Unsafe"
 	SafetyControversial = "Controversial"
 )
 
-// SafetyLevels is the official severity token order from the Qwen3Guard README regex.
-var SafetyLevels = []string{SafetySafe, SafetyUnsafe, SafetyControversial}
-
-// PromptCategories is the exact nine-token input category list from the Qwen3Guard
-// README parser regex and CT-8B prompt category branch (DESIGN.md section 1.3).
+// PromptCategories is the exact nine-token input category list. Sources: the
+// README prompt parser regex category_pattern (https://github.com/QwenLM/Qwen3Guard)
+// and the chat template <BEGIN UNSAFE CONTENT CATEGORIES> prompt branch
+// (https://huggingface.co/Qwen/Qwen3Guard-Gen-8B/raw/main/tokenizer_config.json;
+// byte-identical across Gen-0.6B/4B/8B). "Jailbreak" is input-only per the
+// model card Safety Policy (https://huggingface.co/Qwen/Qwen3Guard-Gen-8B).
 var PromptCategories = []string{"Violent", "Non-violent Illegal Acts", "Sexual Content or Sexual Acts", "PII", "Suicide & Self-Harm", "Unethical Acts", "Politically Sensitive Topics", "Copyright Violation", "Jailbreak"}
 
 // Verdict is the locally validated structured assessment returned by upstream.
@@ -29,18 +33,31 @@ type Verdict struct {
 	Categories []string `json:"categories"`
 }
 
-// aliases follows sub2api categoryAliases in backend/internal/securityaudit/prompt_qwen3guard.go
-// and adds the model-card full spelling Personally Identifiable Information (DESIGN.md 1.3).
-var aliases = map[string]string{
-	"violent": "Violent", "violence": "Violent",
-	"non violent illegal acts": "Non-violent Illegal Acts", "non-violent illegal acts": "Non-violent Illegal Acts",
-	"sexual content or sexual acts": "Sexual Content or Sexual Acts", "sexual": "Sexual Content or Sexual Acts",
-	"pii": "PII", "personal identifying information": "PII", "personal identifiable information": "PII", "personally identifiable information": "PII",
-	"suicide self harm": "Suicide & Self-Harm", "suicide and self harm": "Suicide & Self-Harm", "suicide & self-harm": "Suicide & Self-Harm",
-	"unethical acts": "Unethical Acts", "unethical": "Unethical Acts",
-	"politically sensitive topics": "Politically Sensitive Topics", "political": "Politically Sensitive Topics",
-	"copyright violation": "Copyright Violation", "copyright": "Copyright Violation", "jailbreak": "Jailbreak", "prompt injection": "Jailbreak",
-}
+// canonical maps normalized keys (letters/digits only, lowercased — so case,
+// punctuation and separator variants collapse) to official category tokens.
+// It merges sub2api's categoryAliases map (Wei-Shaw/sub2api
+// backend/internal/securityaudit/prompt_qwen3guard.go,
+// https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_qwen3guard.go)
+// with the official tokens themselves and the model-card full spelling
+// "Personally Identifiable Information" (https://huggingface.co/Qwen/Qwen3Guard-Gen-8B
+// Safety Policy) for the PII token.
+var canonical = func() map[string]string {
+	m := map[string]string{}
+	for alias, target := range map[string]string{
+		"violence": "Violent", "non violent illegal acts": "Non-violent Illegal Acts",
+		"sexual": "Sexual Content or Sexual Acts", "personal identifying information": "PII",
+		"personal identifiable information": "PII", "personally identifiable information": "PII",
+		"suicide and self harm": "Suicide & Self-Harm", "unethical": "Unethical Acts",
+		"political": "Politically Sensitive Topics", "copyright": "Copyright Violation",
+		"prompt injection": "Jailbreak",
+	} {
+		m[key(alias)] = target
+	}
+	for _, c := range PromptCategories {
+		m[key(c)] = c
+	}
+	return m
+}()
 
 func key(s string) string {
 	var b strings.Builder
@@ -52,14 +69,11 @@ func key(s string) string {
 	return b.String()
 }
 
-// NormalizeUpstreamCategories canonicalizes aliases case/separator-insensitively,
-// drops None/empty, and preserves upstream order. Alias and None handling cite
-// sub2api prompt_qwen3guard.go categoryAliases and parser token loop.
+// NormalizeUpstreamCategories canonicalizes tokens case/separator-insensitively,
+// drops None/empty (mirroring sub2api's parser token loop — same file as above,
+// `raw == "" || EqualFold(raw,"none") || EqualFold(raw,"n/a")`), preserves
+// upstream order, deduplicates, and rejects unknown categories.
 func NormalizeUpstreamCategories(values []string) ([]string, error) {
-	allowedSet := make(map[string]bool, len(PromptCategories))
-	for _, c := range PromptCategories {
-		allowedSet[key(c)] = true
-	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(values))
 	for _, raw := range values {
@@ -67,35 +81,22 @@ func NormalizeUpstreamCategories(values []string) ([]string, error) {
 		if trimmed == "" || strings.EqualFold(trimmed, "none") || strings.EqualFold(trimmed, "n/a") {
 			continue
 		}
-		k := key(raw)
-		canonical, ok := "", false
-		for alias, target := range aliases {
-			if key(alias) == k {
-				canonical, ok = target, true
-				break
-			}
-		}
+		c, ok := canonical[key(raw)]
 		if !ok {
-			for _, c := range PromptCategories {
-				if key(c) == k {
-					canonical, ok = c, true
-					break
-				}
-			}
-		}
-		if !ok || !allowedSet[key(canonical)] {
 			return nil, fmt.Errorf("unknown category %q", raw)
 		}
-		if !seen[key(canonical)] {
-			seen[key(canonical)] = true
-			out = append(out, canonical)
+		if !seen[key(c)] {
+			seen[key(c)] = true
+			out = append(out, c)
 		}
 	}
 	return out, nil
 }
 
 // ValidateVerdict canonicalizes and validates safety, categories, and the Safe
-// consistency invariant from DESIGN.md section 3.2.
+// consistency invariant: "None" is specified only "if the content is safe" per
+// the chat template (https://huggingface.co/Qwen/Qwen3Guard-Gen-8B/raw/main/tokenizer_config.json),
+// so Safe must carry no categories and Unsafe/Controversial must carry >=1.
 func ValidateVerdict(v Verdict) (Verdict, error) {
 	switch strings.ToLower(strings.TrimSpace(v.Safety)) {
 	case "safe":
@@ -121,8 +122,11 @@ func ValidateVerdict(v Verdict) (Verdict, error) {
 	return v, nil
 }
 
-// Render formats the two-line Qwen3Guard prompt contract. Labels cite the
-// Qwen3Guard README regex and comma-space separator cites sub2api parsing.
+// Render formats the two-line Qwen3Guard prompt contract: "Safety: <token>" /
+// "Categories: <tokens|None>" per the Qwen3Guard README quickstart examples
+// (https://github.com/QwenLM/Qwen3Guard). The ", " separator is chosen because
+// sub2api splits on "," then TrimSpaces
+// (https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_qwen3guard.go).
 func Render(safety string, categories []string) string {
 	cat := "None"
 	if len(categories) > 0 {
@@ -140,9 +144,12 @@ func NewRequestID() string {
 	return "chatcmpl-" + hex.EncodeToString(b)
 }
 
-// PromptSystemPolicy contains gateway-authored task/output framing plus the model-card
-// Safety Policy definitions. The Qwen3Guard chat-template scaffolding is deliberately
-// not replicated, as required by DESIGN.md section 1.5.
+// PromptSystemPolicy contains gateway-authored task/output framing plus the
+// Qwen3Guard model card Safety Policy definitions, quoted from
+// https://huggingface.co/Qwen/Qwen3Guard-Gen-8B (Safety Policy section;
+// identical in the 4B/0.6B cards and the README's policy section at
+// https://github.com/QwenLM/Qwen3Guard). The chat-template scaffolding is
+// deliberately NOT replicated (project non-goal, DESIGN.md section 1.5).
 const PromptSystemPolicy = `You are a content safety classification engine. Classify the supplied user text according to the policy below. Return only one JSON object, with no markdown or surrounding prose, using exactly the fields "safety" and "categories". "safety" must be one of "Safe", "Unsafe", or "Controversial". "categories" must be an array of official category tokens; use [] when there are no applicable categories.
 
 Qwen3Guard Safety Policy (verbatim from the model card):

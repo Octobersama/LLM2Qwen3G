@@ -63,7 +63,7 @@ func TestServerStreamAndAuthAndEmpty(t *testing.T) {
 	stream.Header.Set("Authorization", "Bearer secret")
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, stream)
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "data: [DONE]") || strings.Count(rr.Body.String(), "data:") != 3 {
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "data: [DONE]") || strings.Count(rr.Body.String(), "data:") != 4 || !strings.Contains(rr.Body.String(), `"finish_reason":"stop"`) {
 		t.Fatalf("stream=%q", rr.Body.String())
 	}
 }
@@ -96,5 +96,18 @@ func TestFailurePoliciesAndTruncation(t *testing.T) {
 		if policy != "error" && !strings.Contains(rr.Body.String(), "Categories: None") {
 			t.Fatal(rr.Body.String())
 		}
+	}
+}
+
+func TestRequestBodyLimit(t *testing.T) {
+	h := NewWithClient(testConfig("http://unused.example"), &upstream.Client{BaseURL: "http://unused.example", APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+	// One byte over the envelope cap must yield 413, not an unbounded read
+	// or a confusing 400.
+	big := `{"messages":[{"role":"user","content":"` + strings.Repeat("x", maxRequestBodyBytes) + `"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(big))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }

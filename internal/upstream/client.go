@@ -10,23 +10,23 @@ import (
 	"strings"
 	"time"
 
+	"llm2qwen3guard/internal/config"
 	"llm2qwen3guard/internal/qwen3guard"
 )
 
-// ErrorKind identifies whether an upstream failure is authentication,
-// non-retryable, potentially degradable, or transport-related.
-type ErrorKind string
+// maxResponseBytes caps the upstream response body, mirroring sub2api's
+// maxGuardResponseBytes (Wei-Shaw/sub2api backend/internal/securityaudit/
+// prompt_outbound_security.go,
+// https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_outbound_security.go).
+const maxResponseBytes = 256 * 1024
 
-const (
-	ErrorAuth         ErrorKind = "auth"
-	ErrorNonRetryable ErrorKind = "nonretryable"
-	ErrorDegraded     ErrorKind = "degraded-possible"
-	ErrorTransport    ErrorKind = "transport"
-)
+// maxErrorSnippetBytes caps how much of an upstream error body is retained in
+// the error message.
+const maxErrorSnippetBytes = 4096
 
-// UpstreamError retains status and classification for the gateway failure policy.
+// UpstreamError retains the HTTP status and the structured-output mode for the
+// gateway failure policy; the degradation decision reads Status directly.
 type UpstreamError struct {
-	Kind   ErrorKind
 	Status int
 	Mode   string
 	Err    error
@@ -46,8 +46,11 @@ type Usage = json.RawMessage
 // AuditRequest describes one prompt classification call.
 type AuditRequest struct{ Text string }
 
-// Client invokes an OpenAI-compatible upstream endpoint using structured output
-// negotiation from DESIGN.md section 3.1-3.2.
+// Client invokes an OpenAI-compatible upstream endpoint using structured output:
+// json_schema per OpenRouter (https://openrouter.ai/docs/guides/features/structured-outputs)
+// and SiliconFlow (https://docs.siliconflow.com/cn/userguide/guides/json-mode_struct),
+// json_object per both providers' JSON-mode docs (e.g. Zhipu only supports
+// json_object: https://docs.bigmodel.cn/cn/guide/capabilities/struct-output).
 type Client struct {
 	BaseURL              string
 	APIKey               string
@@ -56,9 +59,26 @@ type Client struct {
 	MaxTokens            int
 	Temperature          float64
 	StructuredOutputMode string
-	JSONSchemaStrict     bool
-	ExtraBody            map[string]any
-	HTTPClient           *http.Client
+	// JSONSchemaStrict adds "strict": true to json_schema requests; optional
+	// per OpenRouter, undocumented for SiliconFlow (see config.Config).
+	JSONSchemaStrict bool
+	ExtraBody        map[string]any
+	HTTPClient       *http.Client
+}
+
+// NewClient builds the production client from validated gateway configuration.
+func NewClient(cfg config.Config) *Client {
+	return &Client{
+		BaseURL:              cfg.UpstreamBaseURL,
+		APIKey:               cfg.UpstreamAPIKey,
+		Model:                cfg.UpstreamModel,
+		Timeout:              time.Duration(cfg.UpstreamTimeout) * time.Second,
+		MaxTokens:            cfg.UpstreamMaxTokens,
+		Temperature:          cfg.UpstreamTemperature,
+		StructuredOutputMode: cfg.StructuredOutputMode,
+		JSONSchemaStrict:     cfg.JSONSchemaStrict,
+		ExtraBody:            cfg.UpstreamExtraBody,
+	}
 }
 
 // Do performs json_schema, json_object, or the sole auto degradation chain and
@@ -93,7 +113,7 @@ func (c *Client) doOne(ctx context.Context, text, outputMode string) (string, Us
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Mode: outputMode, Err: err}
 	}
 	timeout := c.Timeout
 	if timeout <= 0 {
@@ -107,7 +127,7 @@ func (c *Client) doOne(ctx context.Context, text, outputMode string) (string, Us
 	}
 	hreq, err := http.NewRequestWithContext(callCtx, http.MethodPost, endpointURL(c.BaseURL), bytes.NewReader(payload))
 	if err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Mode: outputMode, Err: err}
 	}
 	hreq.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
@@ -115,25 +135,19 @@ func (c *Client) doOne(ctx context.Context, text, outputMode string) (string, Us
 	}
 	resp, err := hc.Do(hreq)
 	if err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorTransport, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Mode: outputMode, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		kind := ErrorNonRetryable
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			kind = ErrorAuth
-		} else if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			kind = ErrorDegraded
-		}
-		return "", nil, &UpstreamError{Kind: kind, Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("%s", strings.TrimSpace(string(b)))}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorSnippetBytes))
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("%s", strings.TrimSpace(string(b)))}
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorTransport, Status: resp.StatusCode, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: err}
 	}
-	if len(data) > 256*1024 {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("upstream response exceeds 256KB")}
+	if len(data) > maxResponseBytes {
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("upstream response exceeds %d bytes", maxResponseBytes)}
 	}
 	var env struct {
 		Choices []struct {
@@ -144,24 +158,34 @@ func (c *Client) doOne(ctx context.Context, text, outputMode string) (string, Us
 		Usage json.RawMessage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &env); err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Status: resp.StatusCode, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: err}
 	}
 	if len(env.Choices) == 0 {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("missing choices")}
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: fmt.Errorf("missing choices")}
 	}
 	content, err := joinContent(env.Choices[0].Message.Content)
 	if err != nil {
-		return "", nil, &UpstreamError{Kind: ErrorNonRetryable, Status: resp.StatusCode, Mode: outputMode, Err: err}
+		return "", nil, &UpstreamError{Status: resp.StatusCode, Mode: outputMode, Err: err}
 	}
 	return content, env.Usage, nil
 }
 
-// endpointURL appends "/chat/completions" while preserving provider base paths.
+// endpointURL appends "/chat/completions" while preserving the configured base
+// path verbatim (OpenAI SDK convention): e.g. Zhipu base
+// https://open.bigmodel.cn/api/paas/v4 (docs.bigmodel.cn Chat Completions API)
+// and OpenRouter base https://openrouter.ai/api/v1 both POST to
+// base + "/chat/completions".
 func endpointURL(base string) string {
 	return strings.TrimRight(strings.TrimSpace(base), "/") + "/chat/completions"
 }
 
-// responseFormat builds the documented json_object or json_schema request shape.
+// responseFormat builds the response_format request field: json_object shape
+// per https://docs.siliconflow.com/cn/userguide/guides/json-mode and
+// https://docs.bigmodel.cn/cn/guide/capabilities/struct-output; json_schema
+// shape per https://openrouter.ai/docs/guides/features/structured-outputs and
+// https://docs.siliconflow.com/cn/userguide/guides/json-mode_struct. "strict"
+// is only included when explicitly enabled (OpenRouter: optional;
+// SiliconFlow: undocumented under response_format).
 func responseFormat(output string, strict bool) map[string]any {
 	if output == "json_object" {
 		return map[string]any{"type": "json_object"}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,9 @@ import (
 	"llm2qwen3guard/internal/qwen3guard"
 	"llm2qwen3guard/internal/upstream"
 )
+
+// maxRequestBodyBytes caps the inbound JSON envelope (see chat).
+const maxRequestBodyBytes = 64 << 20
 
 // Handler exposes the OpenAI-compatible prompt-audit endpoints described in
 // DESIGN.md section 4. Response auditing is intentionally not implemented:
@@ -22,7 +26,7 @@ type Handler struct {
 
 // New creates a gateway HTTP handler from validated configuration.
 func New(cfg config.Config) *Handler {
-	return &Handler{cfg: cfg, upstream: &upstream.Client{BaseURL: cfg.UpstreamBaseURL, APIKey: cfg.UpstreamAPIKey, Model: cfg.UpstreamModel, Timeout: time.Duration(cfg.UpstreamTimeout) * time.Second, MaxTokens: cfg.UpstreamMaxTokens, Temperature: cfg.UpstreamTemperature, StructuredOutputMode: cfg.StructuredOutputMode, JSONSchemaStrict: cfg.JSONSchemaStrict, ExtraBody: cfg.UpstreamExtraBody}}
+	return &Handler{cfg: cfg, upstream: upstream.NewClient(cfg)}
 }
 
 // NewWithClient creates a handler with an injected upstream client for tests.
@@ -64,14 +68,26 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	upstreamMode, outcome := "", "failure"
 	defer func() {
-		log.Printf("mode=prompt upstream_mode=%s latency=%s outcome=%s", upstreamMode, time.Since(start).Round(time.Millisecond), outcome)
+		log.Printf("upstream_mode=%s latency=%s outcome=%s", upstreamMode, time.Since(start).Round(time.Millisecond), outcome)
 	}()
 	if h.cfg.GatewayAPIKey != "" && r.Header.Get("Authorization") != "Bearer "+h.cfg.GatewayAPIKey {
 		writeAPIError(w, http.StatusUnauthorized, "invalid gateway api key")
 		return
 	}
+	// Bound the request body before decoding: MAX_INPUT_CHARS bounds the
+	// audited text, but the JSON envelope itself must also be capped so a
+	// hostile client cannot stream an unbounded body at the gateway.
+	// 64MB comfortably exceeds sub2api's MaxInputLimit=100000 upper bound
+	// (backend/internal/securityaudit/prompt_config.go,
+	// https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_config.go)
+	// with any reasonable JSON overhead.
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeAPIError(w, http.StatusRequestEntityTooLarge, "request body exceeds limit")
+			return
+		}
 		writeAPIError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -124,9 +140,15 @@ func (h *Handler) writeCompletion(w http.ResponseWriter, stream bool, content st
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		role := map[string]any{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}}}
-		full := map[string]any{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": content}, "finish_reason": nil}}}
-		for _, frame := range []any{role, full} {
+		// Standard OpenAI stream shape: role delta, content delta, then a
+		// terminal chunk with finish_reason "stop" (sub2api's OpenAI clients
+		// expect the stop marker to terminate a stream).
+		frames := []map[string]any{
+			{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant"}, "finish_reason": nil}}},
+			{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": content}, "finish_reason": nil}}},
+			{"id": id, "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}},
+		}
+		for _, frame := range frames {
 			data, _ := json.Marshal(frame)
 			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		}
@@ -148,8 +170,5 @@ func writeAPIError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message, "type": "api_error", "code": "guard_pipeline_failure"}})
 }
-
-// Config returns the handler's effective configuration.
-func (h *Handler) Config() config.Config { return h.cfg }
 
 var _ http.Handler = (*Handler)(nil)
