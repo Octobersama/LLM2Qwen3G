@@ -10,8 +10,10 @@ LLM2Qwen3Guard 是一个零依赖 Go 网关：对外暴露 OpenAI 兼容的 `POS
 
 ```
 cmd/gateway ──► internal/server ──► internal/upstream ──► internal/qwen3guard
-                    │                                        ▲
-                    └──────────► internal/config ────────────┘(仅 upstream/server 引)
+                    │      │                              ▲
+                    │      └──────────────────────────────►│
+                    ▼
+             internal/config（叶子，被 cmd/server/upstream 引用，不引任何内部包）
 ```
 
 单请求流水线（`internal/server/server.go` `chat`）：
@@ -34,7 +36,7 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 | `internal/config/` | 环境变量解析与**启动期全量校验**（FromEnv + envInt/envFloat/envOr） |
 | `internal/qwen3guard/` | 纯域包（无 net/http）：`contract.go` 官方 token/别名映射/校验/渲染/PromptSystemPolicy；`extract.go` 消息抽取；`jsonpayload.go` 宽容 JSON 解析 |
 | `internal/upstream/` | OpenAI 兼容上游客户端：降级链、`endpointURL`（base 路径原样保留）、256KiB 响应上限、`UpstreamError{Status,Mode}` |
-| `internal/server/` | HTTP 编排：路由/鉴权/限流/截断/失败策略/SSE |
+| `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE |
 | `dist/` | **有意提交**的跨平台发布二进制（gateway-linux-amd64、gateway-windows-amd64.exe） |
 | `_research/` | gitignore 的调研原始快照（sub2api 源码、智谱 OpenAPI、HF chat_template）——勿删勿提交 |
 | `DESIGN.md` | 带出处的协议合同（改动协议前必读） |
