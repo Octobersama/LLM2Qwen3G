@@ -169,6 +169,10 @@ sub2api 只做 prompt-input 审计（feature spec 名就叫 prompt-input-audit�
 
 ---
 
+## 4. 网关对外接口（OpenAI 兼容）
+
+- `POST /v1/chat/completions`：接受标准 chat body（model 忽略；messages 必填；`stream` 支持——SSE 返回 role 帧 → content 帧 → `finish_reason:"stop"` 终止帧 + `[DONE]`，因为审计结果是整体产出的）。
+- `GET /healthz`：健康检查（`{"status":"ok"}`）。sub2api 不调 `/v1/models`，不实现。
 - 文本抽取：取 **最后一条 user 消息**（固定，见 §2.4）。content 为字符串或 OpenAI content 数组（拼接 text 部件）。多轮历史不作为上游上下文（sub2api 主场景只发单条 user 消息；官方模板仅用于 Qwen3Guard 自己的输入渲染，本网关不复刻模板——非目标）。
 - 可选审查侧重附录：`AUDIT_POLICY_APPEND_FILE`（见 §1.6）。
 - 审计日志（`internal/logsys`）：每请求双通道记录——stdout 常开（Docker/journald 消费）+ 文件 `LOG_DIR`（默认 `logs`，按日轮转 JSONL；`off` 关闭，Docker read-only 场景用）。字段白名单：request_id/text_chars/stream/model/base_url/api_key(**Redact 脱敏**)/mode/status/latency_ms/safety/categories；**绝不记录**待审文本、messages、上游原始 JSON、appendix 内容。`LOG_LEVEL`=debug|info|warn|error（默认 info）。
