@@ -20,7 +20,7 @@ func TestServerEndToEnd(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"safety\":\"Unsafe\",\"categories\":[\"violence\"]}"}}]}`))
 	}))
 	defer up.Close()
-	h := NewWithClient(testConfig(up.URL), &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+	h := NewWithClient(testConfig(up.URL), &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"ignored","messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -45,7 +45,7 @@ func TestServerStreamAndAuthAndEmpty(t *testing.T) {
 	cfg := testConfig(up.URL)
 	cfg.MaxInputChars = 0
 	cfg.GatewayAPIKey = "secret"
-	h := NewWithClient(cfg, &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+	h := NewWithClient(cfg, &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"}, nil)
 	bad := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[]}`))
 	bad.Header.Set("Authorization", "Bearer secret")
 	rr := httptest.NewRecorder()
@@ -82,7 +82,7 @@ func TestFailurePoliciesAndTruncation(t *testing.T) {
 	for _, policy := range []string{"error", "safe", "unsafe"} {
 		cfg := testConfig(up.URL)
 		cfg.FailurePolicy = policy
-		h := NewWithClient(cfg, &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+		h := NewWithClient(cfg, &upstream.Client{BaseURL: up.URL, APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"}, nil)
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"123456"}]}`))
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
@@ -104,7 +104,7 @@ func TestRequestBodyLimit(t *testing.T) {
 	// oversize regardless of the threshold.
 	cfg := testConfig("http://unused.example")
 	cfg.MaxRequestBytes = 64
-	h := NewWithClient(cfg, &upstream.Client{BaseURL: "http://unused.example", APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+	h := NewWithClient(cfg, &upstream.Client{BaseURL: "http://unused.example", APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"}, nil)
 	big := `{"messages":[{"role":"user","content":"` + strings.Repeat("x", 256) + `"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(big))
 	rr := httptest.NewRecorder()

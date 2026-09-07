@@ -59,6 +59,9 @@ type Client struct {
 	MaxTokens            int
 	Temperature          float64
 	StructuredOutputMode string
+	// PolicyAppendix is the operator-configured audit focus appended to the
+	// system policy (see qwen3guard.SystemPolicy); empty = stock policy.
+	PolicyAppendix string
 	// JSONSchemaStrict adds "strict": true to json_schema requests; optional
 	// per OpenRouter, undocumented for SiliconFlow (see config.Config).
 	JSONSchemaStrict bool
@@ -76,6 +79,7 @@ func NewClient(cfg config.Config) *Client {
 		MaxTokens:            cfg.UpstreamMaxTokens,
 		Temperature:          cfg.UpstreamTemperature,
 		StructuredOutputMode: cfg.StructuredOutputMode,
+		PolicyAppendix:       cfg.PolicyAppendix,
 		JSONSchemaStrict:     cfg.JSONSchemaStrict,
 		ExtraBody:            cfg.UpstreamExtraBody,
 	}
@@ -107,7 +111,7 @@ func (c *Client) Do(ctx context.Context, req AuditRequest) (string, Usage, strin
 	return "", nil, "", last
 }
 func (c *Client) doOne(ctx context.Context, text, outputMode string) (string, Usage, error) {
-	body := map[string]any{"model": c.Model, "messages": []map[string]string{{"role": "system", "content": qwen3guard.PromptSystemPolicy}, {"role": "user", "content": text}}, "temperature": c.Temperature, "max_tokens": c.MaxTokens, "response_format": responseFormat(outputMode, c.JSONSchemaStrict)}
+	body := map[string]any{"model": c.Model, "messages": []map[string]string{{"role": "system", "content": qwen3guard.SystemPolicy(c.PolicyAppendix)}, {"role": "user", "content": text}}, "temperature": c.Temperature, "max_tokens": c.MaxTokens, "response_format": responseFormat(outputMode, c.JSONSchemaStrict)}
 	for k, v := range c.ExtraBody {
 		body[k] = v
 	}
@@ -196,8 +200,15 @@ func responseFormat(output string, strict bool) map[string]any {
 	}
 	return map[string]any{"type": "json_schema", "json_schema": js}
 }
+
 func schemaProperties() map[string]any {
-	return map[string]any{"safety": map[string]any{"type": "string", "enum": []string{qwen3guard.SafetySafe, qwen3guard.SafetyUnsafe, qwen3guard.SafetyControversial}}, "categories": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": qwen3guard.PromptCategories}, "uniqueItems": true}}
+	// NOTE: no "uniqueItems" on the categories array — DashScope (Qwen)
+	// rejects json_schema whose array types carry uniqueItems
+	// ("<400> InternalError.Algo.InvalidParameter ... When the schema contains
+	// the fields \"uniqueItems\" ... the type should not be \"array\"").
+	// Deduplication is enforced locally by NormalizeUpstreamCategories, so the
+	// schema constraint is unnecessary.
+	return map[string]any{"safety": map[string]any{"type": "string", "enum": []string{qwen3guard.SafetySafe, qwen3guard.SafetyUnsafe, qwen3guard.SafetyControversial}}, "categories": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": qwen3guard.PromptCategories}}}
 }
 func joinContent(raw json.RawMessage) (string, error) {
 	var s string

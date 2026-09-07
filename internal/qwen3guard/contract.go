@@ -144,13 +144,13 @@ func NewRequestID() string {
 	return "chatcmpl-" + hex.EncodeToString(b)
 }
 
-// PromptSystemPolicy contains gateway-authored task/output framing plus the
-// Qwen3Guard model card Safety Policy definitions, quoted from
+// systemPolicyHead is the gateway-authored task framing plus the Qwen3Guard
+// model card Safety Policy definitions, quoted from
 // https://huggingface.co/Qwen/Qwen3Guard-Gen-8B (Safety Policy section;
 // identical in the 4B/0.6B cards and the README's policy section at
 // https://github.com/QwenLM/Qwen3Guard). The chat-template scaffolding is
 // deliberately NOT replicated (project non-goal, DESIGN.md section 1.5).
-const PromptSystemPolicy = `You are a content safety classification engine. Classify the supplied user text according to the policy below. Return only one JSON object, with no markdown or surrounding prose, using exactly the fields "safety" and "categories". "safety" must be one of "Safe", "Unsafe", or "Controversial". "categories" must be an array of official category tokens; use [] when there are no applicable categories.
+const systemPolicyHead = `You are a content safety classification engine. Classify the supplied user text according to the policy below. Return only one JSON object, with no markdown or surrounding prose, using exactly the fields "safety" and "categories". "safety" must be one of "Safe", "Unsafe", or "Controversial". "categories" must be an array of official category tokens; use [] when there are no applicable categories.
 
 Qwen3Guard Safety Policy (verbatim from the model card):
 In Qwen3Guard, potential harms are classified into three severity levels:
@@ -167,6 +167,21 @@ The safety categories are:
 * Unethical Acts: Any immoral or unethical content or acts, including but not limited to bias, discrimination, stereotype, injustice, hate speech, offensive language, harassment, insults, threat, defamation, extremism, misinformation regarding ethics, and other behaviors that while not illegal are still considered unethical.
 * Politically Sensitive Topics: The deliberate creation or spread of false information about government actions, historical events, or public figures that is demonstrably untrue and poses risk of public deception or social harm.
 * Copyright Violation: Content offering unauthorized reproduction, distribution, public display, or derivative use of copyrighted materials, such as novels, scripts, lyrics, and other creative works protected by law, without the explicit permission of the copyright holder.
-* Jailbreak (Only for input): Content that explicitly attempts to override the model's system prompt or model conditioning.
+* Jailbreak (Only for input): Content that explicitly attempts to override the model's system prompt or model conditioning.`
 
-Output only valid JSON matching the requested fields and enum values.`
+// systemPolicyTail pins the output contract; it must stay last so the
+// operator-configured appendix cannot displace the JSON format instruction.
+const systemPolicyTail = "\nOutput only valid JSON matching the requested fields and enum values."
+
+// SystemPolicy composes the upstream system prompt. An empty appendix yields
+// the stock policy; a non-empty appendix (operator focus, from
+// AUDIT_POLICY_APPEND_FILE) is inserted between the official policy and the
+// JSON output instruction as an "Additional audit focus" section. The two-line
+// Qwen3Guard render contract is unaffected: safety enum and category tokens
+// are still enforced locally by ValidateVerdict regardless of prompt content.
+func SystemPolicy(appendix string) string {
+	if strings.TrimSpace(appendix) == "" {
+		return systemPolicyHead + systemPolicyTail
+	}
+	return systemPolicyHead + "\n\nAdditional audit focus (operator-configured, refines but does not replace the policy above; still classify only into the official categories and safety levels):\n" + strings.TrimSpace(appendix) + systemPolicyTail
+}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"llm2qwen3guard/internal/config"
+	"llm2qwen3guard/internal/logsys"
 	"llm2qwen3guard/internal/server"
 )
 
@@ -33,7 +34,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: server.New(cfg)}
+	lg, err := logsys.New(cfg.LogDir, cfg.LogLevel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lg.Close()
+	lg.Infof("gateway_start", map[string]any{
+		"listen_addr":     cfg.ListenAddr,
+		"model":           cfg.UpstreamModel,
+		"base_url":        cfg.UpstreamBaseURL,
+		"api_key":         logsys.Redact(cfg.UpstreamAPIKey),
+		"output_mode":     cfg.StructuredOutputMode,
+		"failure_policy":  cfg.FailurePolicy,
+		"policy_appendix": cfg.PolicyAppendix != "",
+		"log_dir":         cfg.LogDir,
+	})
+	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: server.New(cfg, lg)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
@@ -50,11 +66,6 @@ func main() {
 		log.Printf("gateway shutdown error: %v", err)
 	}
 }
-
-// runHealthcheck GETs /healthz on the address from the raw LISTEN_ADDR env
-// value (default ":8080") and returns 0 only on HTTP 200. It intentionally
-// does not require upstream credentials — it checks that the gateway process
-// is serving.
 func runHealthcheck() int {
 	return probeHealthz(os.Getenv("LISTEN_ADDR"), &http.Client{Timeout: 3 * time.Second})
 }

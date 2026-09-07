@@ -31,8 +31,17 @@ type Config struct {
 	// MaxRequestBytes caps the inbound /v1/chat/completions JSON envelope
 	// (MAX_REQUEST_BYTES, default 1MiB).
 	MaxRequestBytes int
-	FailurePolicy   string
-	GatewayAPIKey   string
+	// PolicyAppendix is the operator-configured audit focus text loaded from
+	// AUDIT_POLICY_APPEND_FILE and inserted into the system policy (see
+	// qwen3guard.SystemPolicy). Empty = stock Qwen3Guard policy only.
+	PolicyAppendix string
+	// LogDir targets the structured file log when set (LOG_DIR; default
+	// "logs" under the working directory; "off" disables file logging —
+	// stdout logging always remains on for Docker/journald consumption).
+	LogDir        string
+	LogLevel      string
+	FailurePolicy string
+	GatewayAPIKey string
 }
 
 // FromEnv reads and validates gateway configuration from environment variables.
@@ -91,6 +100,30 @@ func FromEnv() (Config, error) {
 	}
 	if c.FailurePolicy != "error" && c.FailurePolicy != "safe" && c.FailurePolicy != "unsafe" {
 		return Config{}, fmt.Errorf("invalid FAILURE_POLICY")
+	}
+	// Operator-configured audit focus: loaded once at startup from
+	// AUDIT_POLICY_APPEND_FILE; empty/unset = stock policy.
+	if p := strings.TrimSpace(os.Getenv("AUDIT_POLICY_APPEND_FILE")); p != "" {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return Config{}, fmt.Errorf("AUDIT_POLICY_APPEND_FILE: %w", err)
+		}
+		c.PolicyAppendix = string(data)
+	}
+	// Logging: LOG_DIR default "logs" (same directory); "off" disables the
+	// file sink, stdout always stays on. LOG_LEVEL in debug|info|warn|error.
+	c.LogDir = envOr("LOG_DIR", "logs")
+	c.LogLevel = strings.ToLower(envOr("LOG_LEVEL", "info"))
+	if c.LogDir != "off" {
+		// fail fast when the target is not writable
+		if err := os.MkdirAll(c.LogDir, 0o755); err != nil {
+			return Config{}, fmt.Errorf("LOG_DIR %q: %w", c.LogDir, err)
+		}
+	}
+	switch c.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return Config{}, fmt.Errorf("invalid LOG_LEVEL %q", c.LogLevel)
 	}
 	c.GatewayAPIKey = os.Getenv("GATEWAY_API_KEY")
 	return c, nil

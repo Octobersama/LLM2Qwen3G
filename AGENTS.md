@@ -21,12 +21,13 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 1. 可选 Bearer 鉴权（`GATEWAY_API_KEY`，401）
 2. `http.MaxBytesReader` 请求体上限（`MAX_REQUEST_BYTES` 默认 1MiB，超限 413）
 3. 解码 → 取**最后一条 user 消息**文本（string 或 content 数组的 text 部件拼接）→ `MAX_INPUT_CHARS` rune 截断
-4. `upstream.Client.Do`：system=PromptSystemPolicy（模型卡政策原文 + 网关自撰 JSON 指令）+ user=待审文本，`response_format` 按 `STRUCTURED_OUTPUT_MODE` 协商；`auto` 先 `json_schema`，遇 4xx（非 401/403/429）降级 `json_object` 重试一次，**绝无自由文本回退**
-5. `ParseUpstreamJSON`（容忍 markdown 栅栏/包裹文本）→ `ValidateVerdict`（safety 枚举、类目别名规范化到官方 9 token、Safe⇒无类目 / 非Safe⇒≥1类目）
+4. `upstream.Client.Do`：system=`SystemPolicy(PolicyAppendix)`（模型卡政策原文 + 可选运营者侧重附录 + 网关自撰 JSON 指令，JSON 指令固定末尾）+ user=待审文本，`response_format` 按 `STRUCTURED_OUTPUT_MODE` 协商；`auto` 先 `json_schema`，遇 4xx（非 401/403/429）降级 `json_object` 重试一次，**绝无自由文本回退**。注意：schema 不带 `uniqueItems`（DashScope 拒绝数组+uniqueItems，去重由本地校验强制）
+5. `ParseUpstreamJSON`（容忍 markdown 栅栏/包裹文本）→ `ValidateVerdict`（safety 枚举、类目别名规范化到官方 9 token、Safe⇒无类目 / 非Safe⇒≥1类目）——**这是 appendix 无法绕过的合同边界**
 6. `Render` 两行文本 → 非 stream 输出 chat.completion 信封（透传 usage），stream 输出 3 帧 SSE（role → content → finish_reason:"stop"）+ `[DONE]`
-7. 任何上游/解析/校验失败走 `FAILURE_POLICY`（默认 `error`=503 fail-closed，与 sub2api 语义对齐；可选 `safe`/`unsafe`）
+7. 任何上游/解析/校验失败走 `FAILURE_POLICY`（默认 `error`=503 fail-closed，与 sub2api 语义对齐；可选 `safe`/`unsafe`）；503 对外**固定文案**（"guard pipeline failure"），绝不透出上游响应体
+8. 每请求经 `internal/logsys` 双通道记审计事件：stdout 常开（Docker/journald）+ 文件 `logs/gateway-YYYYMMDD.jsonl` 按日轮转（`LOG_DIR=off` 关闭）。字段白名单：request_id/text_chars/stream/model/base_url/api_key(脱敏)/mode/status/latency_ms/safety/categories——**绝不记录**待审文本、messages、上游原始 JSON、appendix 内容
 
-入口 `cmd/gateway/main.go`：`config.FromEnv`（失败即 fatal）→ `http.Server` → SIGINT/SIGTERM 优雅关停（10s）。
+入口 `cmd/gateway/main.go`：`config.FromEnv`（失败即 fatal，含 appendix 文件读取与 LOG_DIR 可写性检查）→ `logsys.New` → `http.Server` → SIGINT/SIGTERM 优雅关停（10s）；`-healthcheck` flag 供容器探针。
 
 ## Key Directories
 
@@ -34,9 +35,8 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 |---|---|
 | `cmd/gateway/` | main：装配 config + server，优雅关停 |
 | `internal/config/` | 环境变量解析与**启动期全量校验**（FromEnv + envInt/envFloat/envOr） |
-| `internal/qwen3guard/` | 纯域包（无 net/http）：`contract.go` 官方 token/别名映射/校验/渲染/PromptSystemPolicy；`extract.go` 消息抽取；`jsonpayload.go` 宽容 JSON 解析 |
-| `internal/upstream/` | OpenAI 兼容上游客户端：降级链、`endpointURL`（base 路径原样保留）、256KiB 响应上限、`UpstreamError{Status,Mode}` |
-| `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE |
+| `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE/审计日志事件 |
+| `internal/logsys/` | 双通道结构化日志（stdout + 按日轮转 JSONL 文件）、API key 脱敏 `Redact`、日志字段白名单在此强制 |
 | （无 dist/） | 二进制不入库；经 [GitHub Releases](https://github.com/Octobersama/LLM2Qwen3G/releases) 分发（v0.1.1+），本地构建走 `-buildvcs=false` |
 | `_research/` | gitignore 的调研原始快照（sub2api 源码、智谱 OpenAPI、HF chat_template）——勿删勿提交 |
 | `Dockerfile` + `docker-compose.yml` + `.env.docker.example` + `.dockerignore` | 容器部署（多阶段：golang:1.25-alpine 构建 → distroless/static:nonroot 运行；compose 注入 env_file，健康探针用内置 `-healthcheck`——distroless 无 shell，不能改用 curl/wget；`.dockerignore` 防敏感文件入构建上下文）；本机无 Docker，未实测 |

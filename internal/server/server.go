@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"llm2qwen3guard/internal/config"
+	"llm2qwen3guard/internal/logsys"
 	"llm2qwen3guard/internal/qwen3guard"
 	"llm2qwen3guard/internal/upstream"
 )
@@ -26,16 +27,21 @@ const defaultMaxRequestBytes = 1 << 20
 type Handler struct {
 	cfg      config.Config
 	upstream *upstream.Client
+	log      *logsys.Logger
 }
 
-// New creates a gateway HTTP handler from validated configuration.
-func New(cfg config.Config) *Handler {
-	return &Handler{cfg: cfg, upstream: upstream.NewClient(cfg)}
+// New creates a gateway HTTP handler from validated configuration. The logger
+// may be nil (logging disabled); New installs a stdout-only logger otherwise.
+func New(cfg config.Config, lg *logsys.Logger) *Handler {
+	if lg == nil {
+		lg, _ = logsys.New("", "info")
+	}
+	return &Handler{cfg: cfg, upstream: upstream.NewClient(cfg), log: lg}
 }
 
 // NewWithClient creates a handler with an injected upstream client for tests.
-func NewWithClient(cfg config.Config, client *upstream.Client) *Handler {
-	h := New(cfg)
+func NewWithClient(cfg config.Config, client *upstream.Client, lg *logsys.Logger) *Handler {
+	h := New(cfg, lg)
 	if client != nil {
 		h.upstream = client
 	}
@@ -70,11 +76,31 @@ type chatRequest struct {
 
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	upstreamMode, outcome := "", "failure"
+	reqID := qwen3guard.NewRequestID()
+	// Log field whitelist (audit-relevant, non-sensitive): request_id,
+	// text_chars, stream, model, base_url, api_key (REDACTED), mode, status,
+	// latency_ms, safety, categories. The audited text, messages, raw
+	// upstream JSON, and the policy appendix are NEVER logged.
+	fields := map[string]any{
+		"request_id": reqID,
+		"model":      h.cfg.UpstreamModel,
+		"base_url":   h.cfg.UpstreamBaseURL,
+		"api_key":    logsys.Redact(h.cfg.UpstreamAPIKey),
+		"stream":     false,
+	}
+	upstreamMode, verdict := "", ""
 	defer func() {
-		log.Printf("upstream_mode=%s latency=%s outcome=%s", upstreamMode, time.Since(start).Round(time.Millisecond), outcome)
+		fields["mode"] = upstreamMode
+		fields["latency_ms"] = time.Since(start).Milliseconds()
+		if verdict != "" {
+			fields["safety"], fields["categories"] = splitVerdict(verdict)
+			h.log.Infof("audit", fields)
+		} else {
+			h.log.Errorf("audit_failed", fields)
+		}
 	}()
 	if h.cfg.GatewayAPIKey != "" && r.Header.Get("Authorization") != "Bearer "+h.cfg.GatewayAPIKey {
+		fields["status"] = 401
 		writeAPIError(w, http.StatusUnauthorized, "invalid gateway api key")
 		return
 	}
@@ -89,31 +115,37 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(&req); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
+			fields["status"] = 413
 			writeAPIError(w, http.StatusRequestEntityTooLarge, "request body exceeds limit")
 			return
 		}
+		fields["status"] = 400
 		writeAPIError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	fields["stream"] = req.Stream
 	if len(req.Messages) == 0 {
+		fields["status"] = 400
 		writeAPIError(w, http.StatusBadRequest, "messages must not be empty")
 		return
 	}
 	text, err := qwen3guard.ExtractAuditText(req.Messages)
 	if err != nil {
+		fields["status"] = 400
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if h.cfg.MaxInputChars > 0 {
 		runes := []rune(text)
 		if len(runes) > h.cfg.MaxInputChars {
-			log.Printf("input truncated from %d to %d characters", len(runes), h.cfg.MaxInputChars)
+			h.log.Warnf("input_truncated", map[string]any{"request_id": reqID, "from_chars": len(runes), "to_chars": h.cfg.MaxInputChars})
 			text = string(runes[:h.cfg.MaxInputChars])
 		}
 	}
+	fields["text_chars"] = len([]rune(text))
 	content, usage, upstreamMode, err := h.upstream.Do(r.Context(), upstream.AuditRequest{Text: text})
 	if err != nil {
-		h.failure(w, err, req.Stream)
+		h.failure(w, err, req.Stream, fields)
 		return
 	}
 	v, err := qwen3guard.ParseUpstreamJSON(content)
@@ -121,25 +153,40 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		v, err = qwen3guard.ValidateVerdict(v)
 	}
 	if err != nil {
-		h.failure(w, err, req.Stream)
+		h.failure(w, err, req.Stream, fields)
 		return
 	}
-	outcome = "success"
-	h.writeCompletion(w, req.Stream, qwen3guard.Render(v.Safety, v.Categories), usage)
+	fields["status"] = 200
+	verdict = v.Safety + "/" + strings.Join(v.Categories, ",")
+	h.writeCompletion(w, req.Stream, qwen3guard.Render(v.Safety, v.Categories), usage, reqID)
 }
-func (h *Handler) failure(w http.ResponseWriter, cause error, stream bool) {
+
+// splitVerdict decomposes "Safety/Cat1,Cat2" for structured logging.
+func splitVerdict(v string) (string, string) {
+	if i := strings.IndexByte(v, '/'); i >= 0 {
+		return v[:i], v[i+1:]
+	}
+	return v, ""
+}
+func (h *Handler) failure(w http.ResponseWriter, cause error, stream bool, fields map[string]any) {
 	if h.cfg.FailurePolicy == "safe" {
-		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetySafe, nil), nil)
+		fields["status"], fields["safety"] = 200, "Safe"
+		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetySafe, nil), nil, fields["request_id"].(string))
 		return
 	}
 	if h.cfg.FailurePolicy == "unsafe" {
-		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetyUnsafe, nil), nil)
+		fields["status"], fields["safety"] = 200, "Unsafe"
+		h.writeCompletion(w, stream, qwen3guard.Render(qwen3guard.SafetyUnsafe, nil), nil, fields["request_id"].(string))
 		return
 	}
-	writeAPIError(w, http.StatusServiceUnavailable, fmt.Sprintf("guard pipeline failure: %v", cause))
+	// Stable generic message only: the underlying error can embed the raw
+	// upstream response body (UpstreamError.Err), which must never reach the
+	// caller (project non-goal: no upstream JSON/explanations to sub2api).
+	// Details stay in the structured log via audit_failed fields.
+	fields["status"] = 503
+	writeAPIError(w, http.StatusServiceUnavailable, "guard pipeline failure")
 }
-func (h *Handler) writeCompletion(w http.ResponseWriter, stream bool, content string, usage json.RawMessage) {
-	id := qwen3guard.NewRequestID()
+func (h *Handler) writeCompletion(w http.ResponseWriter, stream bool, content string, usage json.RawMessage, id string) {
 	if stream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")

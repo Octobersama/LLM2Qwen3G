@@ -7,6 +7,8 @@
 # 研究过程原始材料（已核对的源码快照/原始文档）
 _research/
 
+# 运行时日志（含审计事件，可能带敏感上下文的元数据）
+/logs/
 # 构建产物不入库——发布二进制经 GitHub Releases 分发（见 README）
 /dist/
 /gateway

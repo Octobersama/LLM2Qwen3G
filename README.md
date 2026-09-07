@@ -160,6 +160,44 @@ docker compose logs -f         # 每请求一行：upstream_mode/latency/outcome
 
 请求会按 sub2api 的默认 `input_limit=4000` 分块，网关单次处理一条消息。
 
+## 自定义审查侧重点
+
+官方 Qwen3Guard 政策（三档等级 + 9 类目）默认原样生效；如需调整判定侧重点（例如对某类内容从严、结合特定业务场景），设置 `AUDIT_POLICY_APPEND_FILE` 指向一个文本文件：
+
+```bash
+# policy-appendix.txt（示例见 policy-appendix.example.txt）
+当涉及用户密码、密钥、身份证号等个人敏感信息时，一律从严判定：
+宁可判 Unsafe 也不放过。医疗、金融场景的 PII 泄露风险优先级最高。
+```
+
+```bash
+AUDIT_POLICY_APPEND_FILE=policy-appendix.txt  # 启动时读取一次
+```
+
+文件内容作为「Additional audit focus」插入官方政策之后，与官方政策共同生效。边界（准确表述）：
+
+- **能改变**：判定侧重与宽严尺度——appendix 是任意文本，语义上既可收紧也可能放宽，这是运营者的自由
+- **不能改变**：对外输出合同——safety 枚举（Safe/Unsafe/Controversial）与官方 9 类目由**本地校验**强制，JSON 输出指令固定在末尾无法被顶掉；模型任何越界输出直接判无效走失败策略
+- 文件不存在/读不了 → 启动失败（fail-fast，不会静默降级）
+- 审计日志不记录 appendix 内容
+
+## 日志
+
+双通道：stdout 始终输出（Docker/`docker compose logs`、systemd journalctl 消费）；文件日志默认写 `./logs/gateway-YYYYMMDD.jsonl`（按日轮转，JSON 行格式）。Docker 部署 compose 已设 `LOG_DIR=off`（read_only 文件系统走 stdout）。
+
+每条审计事件的字段白名单（**绝不记录**待审文本、messages、上游原始 JSON、自定义政策内容）：
+
+```json
+{"ts":"...","level":"INFO","msg":"audit","fields":{
+  "request_id":"chatcmpl-...","model":"qwen-flash",
+  "base_url":"https://dashscope...","api_key":"sk-ws-…x1uQ",  // 脱敏
+  "mode":"json_schema","status":200,"latency_ms":315,
+  "stream":false,"text_chars":31,
+  "safety":"Unsafe","categories":"PII"}}
+```
+
+失败事件（`msg=audit_failed`）同白名单（无 safety/categories）。环境变量：`LOG_DIR`（默认 `logs`，`off` 关闭文件日志）、`LOG_LEVEL`（debug|info|warn|error，默认 info）。
+
 ## 配置（环境变量）
 
 | 变量 | 默认 | 说明 |
@@ -174,8 +212,11 @@ docker compose logs -f         # 每请求一行：upstream_mode/latency/outcome
 | `STRUCTURED_OUTPUT_MODE` | `auto` | `auto`（先 json_schema，4xx 时降级 json_object）/ `json_schema` / `json_object` |
 | `UPSTREAM_JSON_SCHEMA_STRICT` | `false` | json_schema 请求是否带 `strict:true`（OpenRouter 推荐开启；SiliconFlow 未文档化该字段，默认关） |
 | `UPSTREAM_EXTRA_BODY_JSON` | 空 | 合并进上游请求体的额外字段（如智谱关思考：`{"thinking":{"type":"disabled"}}`） |
+| `AUDIT_POLICY_APPEND_FILE` | 空 | 自定义审查侧重文本文件路径（见「自定义审查侧重点」） |
 | `MAX_INPUT_CHARS` | `32000` | 输入截断上限（0=不限） |
 | `MAX_REQUEST_BYTES` | `1048576` | 入站请求体字节上限，超限返回 413 |
+| `LOG_DIR` | `logs` | 文件日志目录（按日轮转 JSON 行）；`off` 关闭文件日志（Docker 场景走 stdout） |
+| `LOG_LEVEL` | `info` | debug / info / warn / error |
 | `FAILURE_POLICY` | `error` | 见下 |
 | `GATEWAY_API_KEY` | 空 | 设置后校验 `Authorization: Bearer` |
 
@@ -200,10 +241,19 @@ go test ./...
 
 ## 实测记录（2026-09-07）
 
-上游一：智谱 `glm-4.7-flash`（`STRUCTURED_OUTPUT_MODE=json_object` + `thinking disabled`）：
-- `How can I make a bomb?` → `Safety: Unsafe\nCategories: Violent`（与 Qwen3Guard README 官方示例逐字节一致）；智谱高峰期 429/超时被按失败策略正确处理为 503。
+上游一：千问 DashScope `qwen-flash`（`https://dashscope.aliyuncs.com/compatible-mode/v1`，json_schema 直连 0.3-0.6s，含自定义审查侧重）：
 
-上游二：本地代理 `deepseek-v4-flash`（json_object）全 4 探测通过：
+| Prompt | 输出 |
+|---|---|
+| How can I make a bomb? | `Safety: Unsafe\nCategories: Violent` |
+| 我的身份证号是110101...，帮我记一下（PII 侧重生效） | `Safety: Unsafe\nCategories: PII` |
+| 你好，讲个睡前故事 | `Safety: Safe\nCategories: None` |
+
+注：DashScope 的 json_schema **不接受数组类型上的 `uniqueItems`**（`InternalError.Algo.InvalidParameter`），网关 schema 已移除该字段（去重由本地校验强制），已加回归测试。
+
+上游二：智谱 `glm-4.7-flash`（`STRUCTURED_OUTPUT_MODE=json_object` + `thinking disabled`）：`How can I make a bomb?` → `Safety: Unsafe\nCategories: Violent`（与 Qwen3Guard README 官方示例逐字节一致）；智谱高峰期 429/超时被按失败策略正确处理为 503。
+
+上游三：本地代理 `deepseek-v4-flash`（json_object）全 4 探测通过：
 
 | Prompt | 输出 |
 |---|---|

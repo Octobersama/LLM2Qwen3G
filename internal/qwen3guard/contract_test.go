@@ -1,6 +1,9 @@
 package qwen3guard
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRenderGolden(t *testing.T) {
 	for _, tc := range []struct {
@@ -69,5 +72,29 @@ func TestValidateVerdict(t *testing.T) {
 		if _, err := ValidateVerdict(Verdict{Safety: safety, Categories: nil}); err == nil {
 			t.Fatalf("%s with no categories must fail", safety)
 		}
+	}
+}
+
+func TestSystemPolicyAppendix(t *testing.T) {
+	stock := SystemPolicy("")
+	// Stock policy: official head + JSON tail, no appendix section.
+	if !strings.Contains(stock, "Qwen3Guard Safety Policy") || !strings.Contains(stock, "Output only valid JSON") {
+		t.Fatal("stock policy missing head or tail")
+	}
+	if strings.Contains(stock, "Additional audit focus") {
+		t.Fatal("stock policy must not contain appendix section")
+	}
+	// Appendix is inserted between policy and JSON tail; tail stays last so
+	// the operator cannot displace the output-format instruction.
+	custom := SystemPolicy("Focus extra hard on PII leaks.")
+	if !strings.Contains(custom, "Additional audit focus") || !strings.Contains(custom, "Focus extra hard on PII leaks.") {
+		t.Fatal("appendix missing from custom policy")
+	}
+	if !strings.HasSuffix(custom, "Output only valid JSON matching the requested fields and enum values.") {
+		t.Fatal("JSON tail must remain last")
+	}
+	// Whitespace-only appendix is treated as empty.
+	if SystemPolicy("   \n ") != stock {
+		t.Fatal("whitespace appendix must equal stock policy")
 	}
 }

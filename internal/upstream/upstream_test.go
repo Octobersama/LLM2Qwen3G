@@ -64,6 +64,13 @@ func TestClientJsonSchemaStrictOptIn(t *testing.T) {
 	if _, hasRefusal := props["refusal"]; hasRefusal {
 		t.Fatal("refusal property must not be requested")
 	}
+	// DashScope (Qwen) rejects array schemas carrying uniqueItems
+	// (InternalError.Algo.InvalidParameter); dedup is enforced locally by
+	// NormalizeUpstreamCategories instead.
+	cats := props["categories"].(map[string]any)
+	if _, has := cats["uniqueItems"]; has {
+		t.Fatal("categories schema must not carry uniqueItems (DashScope rejects it)")
+	}
 	if required := schema["required"].([]any); len(required) != 2 {
 		t.Fatalf("required=%v", required)
 	}
