@@ -25,8 +25,9 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
-    # 显式确保容器内监听 :8080（与 ports 映射和 -healthcheck 默认一致；
-    # .env 里的 LISTEN_ADDR 会覆盖此值，勿在 .env 里再设置）
+    # 强制容器内监听 :8080（与 ports 映射、-healthcheck 默认一致）。
+    # Compose 的 environment 优先级高于 env_file：即使 .env 里误设了
+    # LISTEN_ADDR 也会被此值覆盖，避免破坏端口映射与健康检查。
     environment:
       LISTEN_ADDR: ":8080"
     # 与 README 的 systemd 加固对齐的容器级限制
