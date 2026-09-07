@@ -13,8 +13,12 @@ import (
 	"llm2qwen3guard/internal/upstream"
 )
 
-// maxRequestBodyBytes caps the inbound JSON envelope (see chat).
-const maxRequestBodyBytes = 64 << 20
+// defaultMaxRequestBytes caps the inbound JSON envelope when MAX_REQUEST_BYTES
+// is unset (see chat). 1MiB comfortably fits sub2api's largest chunk
+// (MaxInputLimit=100000 chars, backend/internal/securityaudit/prompt_config.go,
+// https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_config.go)
+// with JSON-escaping overhead.
+const defaultMaxRequestBytes = 1 << 20
 
 // Handler exposes the OpenAI-compatible prompt-audit endpoints described in
 // DESIGN.md section 4. Response auditing is intentionally not implemented:
@@ -77,12 +81,12 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	// Bound the request body before decoding: MAX_INPUT_CHARS bounds the
 	// audited text, but the JSON envelope itself must also be capped so a
 	// hostile client cannot stream an unbounded body at the gateway.
-	// 64MB comfortably exceeds sub2api's MaxInputLimit=100000 upper bound
-	// (backend/internal/securityaudit/prompt_config.go,
-	// https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/backend/internal/securityaudit/prompt_config.go)
-	// with any reasonable JSON overhead.
+	limit := int64(h.cfg.MaxRequestBytes)
+	if limit <= 0 {
+		limit = defaultMaxRequestBytes
+	}
 	var req chatRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(&req); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeAPIError(w, http.StatusRequestEntityTooLarge, "request body exceeds limit")

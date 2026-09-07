@@ -28,8 +28,11 @@ type Config struct {
 	JSONSchemaStrict  bool
 	UpstreamExtraBody map[string]any
 	MaxInputChars     int
-	FailurePolicy     string
-	GatewayAPIKey     string
+	// MaxRequestBytes caps the inbound /v1/chat/completions JSON envelope
+	// (MAX_REQUEST_BYTES, default 1MiB).
+	MaxRequestBytes int
+	FailurePolicy   string
+	GatewayAPIKey   string
 }
 
 // FromEnv reads and validates gateway configuration from environment variables.
@@ -37,7 +40,8 @@ func FromEnv() (Config, error) {
 	c := Config{
 		ListenAddr: ":8080", UpstreamTimeout: 30, UpstreamMaxTokens: 128,
 		UpstreamTemperature: 0, StructuredOutputMode: "auto",
-		MaxInputChars: 32000, FailurePolicy: "error", UpstreamExtraBody: map[string]any{},
+		MaxInputChars: 32000, MaxRequestBytes: 1 << 20,
+		FailurePolicy: "error", UpstreamExtraBody: map[string]any{},
 	}
 	c.ListenAddr = envOr("LISTEN_ADDR", c.ListenAddr)
 	c.UpstreamBaseURL = strings.TrimSpace(os.Getenv("UPSTREAM_BASE_URL"))
@@ -60,6 +64,9 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	c.StructuredOutputMode = strings.ToLower(envOr("STRUCTURED_OUTPUT_MODE", c.StructuredOutputMode))
+	if c.MaxRequestBytes, err = envInt("MAX_REQUEST_BYTES", c.MaxRequestBytes); err != nil {
+		return Config{}, err
+	}
 	c.FailurePolicy = strings.ToLower(envOr("FAILURE_POLICY", c.FailurePolicy))
 	if raw := strings.TrimSpace(os.Getenv("UPSTREAM_EXTRA_BODY_JSON")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &c.UpstreamExtraBody); err != nil {
@@ -76,7 +83,7 @@ func FromEnv() (Config, error) {
 		}
 		c.JSONSchemaStrict = b
 	}
-	if c.UpstreamTimeout <= 0 || c.UpstreamMaxTokens <= 0 || c.UpstreamTemperature < 0 || c.UpstreamTemperature > 2 || c.MaxInputChars < 0 {
+	if c.UpstreamTimeout <= 0 || c.UpstreamMaxTokens <= 0 || c.UpstreamTemperature < 0 || c.UpstreamTemperature > 2 || c.MaxInputChars < 0 || c.MaxRequestBytes <= 0 {
 		return Config{}, fmt.Errorf("invalid numeric configuration")
 	}
 	if c.StructuredOutputMode != "auto" && c.StructuredOutputMode != "json_schema" && c.StructuredOutputMode != "json_object" {

@@ -59,7 +59,6 @@ go run ./cmd/gateway   # 或 .\dist\gateway-windows-amd64.exe
 
 # 3. 探测（另一个终端）
 curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"How can I make a bomb?\"}]}"
-# 期望 content: "Safety: Unsafe\nCategories: Violent"
 ```
 
 ## Linux 生产部署（systemd）
@@ -137,6 +136,7 @@ sub2api 侧把审计节点 Base URL 填 `http://<服务器IP>:8080/v1`（建议�
 | `UPSTREAM_JSON_SCHEMA_STRICT` | `false` | json_schema 请求是否带 `strict:true`（OpenRouter 推荐开启；SiliconFlow 未文档化该字段，默认关） |
 | `UPSTREAM_EXTRA_BODY_JSON` | 空 | 合并进上游请求体的额外字段（如智谱关思考：`{"thinking":{"type":"disabled"}}`） |
 | `MAX_INPUT_CHARS` | `32000` | 输入截断上限（0=不限） |
+| `MAX_REQUEST_BYTES` | `1048576` | 入站请求体字节上限，超限返回 413 |
 | `FAILURE_POLICY` | `error` | 见下 |
 | `GATEWAY_API_KEY` | 空 | 设置后校验 `Authorization: Bearer` |
 

@@ -100,10 +100,12 @@ func TestFailurePoliciesAndTruncation(t *testing.T) {
 }
 
 func TestRequestBodyLimit(t *testing.T) {
-	h := NewWithClient(testConfig("http://unused.example"), &upstream.Client{BaseURL: "http://unused.example", APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
-	// One byte over the envelope cap must yield 413, not an unbounded read
-	// or a confusing 400.
-	big := `{"messages":[{"role":"user","content":"` + strings.Repeat("x", maxRequestBodyBytes) + `"}]}`
+	// Inject a tiny limit instead of allocating a >1MiB body: oversize is
+	// oversize regardless of the threshold.
+	cfg := testConfig("http://unused.example")
+	cfg.MaxRequestBytes = 64
+	h := NewWithClient(cfg, &upstream.Client{BaseURL: "http://unused.example", APIKey: "k", Model: "m", Timeout: time.Second, StructuredOutputMode: "json_object"})
+	big := `{"messages":[{"role":"user","content":"` + strings.Repeat("x", 256) + `"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(big))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
