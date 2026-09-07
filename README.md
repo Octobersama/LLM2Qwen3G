@@ -45,8 +45,8 @@ PowerShell 用 `$env:UPSTREAM_BASE_URL="..."`（完整示例见下文「本机�
 | `gateway-linux-amd64` | Linux x64 |
 
 ```bash
-# Linux 示例（按需替换版本号）
-curl -LO https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.1.1/gateway-linux-amd64
+# Linux 示例（按需替换版本号，当前 v0.2.0）
+curl -LO https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.0/gateway-linux-amd64
 chmod +x gateway-linux-amd64
 ```
 
@@ -72,7 +72,7 @@ curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: app
 
 ```bash
 # 1. 下载二进制（从 GitHub Releases；按需替换版本号）
-curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.1.1/gateway-linux-amd64
+curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.0/gateway-linux-amd64
 sudo install -m 755 /tmp/gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
 
 # 2. 专用系统用户（服务以非 root 运行；监听 127.0.0.1:8080 无需特权端口）
