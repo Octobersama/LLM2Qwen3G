@@ -7,7 +7,8 @@
 # 研究过程原始材料（已核对的源码快照/原始文档）
 _research/
 
-# 根目录下的临时构建产物（带前导斜杠，避免误伤 cmd/gateway/ 源码目录；dist/ 发布二进制单独提交）
+# 构建产物不入库——发布二进制经 GitHub Releases 分发（见 README）
+/dist/
 /gateway
 /gateway.exe
 /gateway.exe.tmp

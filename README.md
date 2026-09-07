@@ -35,14 +35,22 @@ PowerShell 用 `$env:UPSTREAM_BASE_URL="..."`（完整示例见下文「本机�
 
 健康检查：`GET /healthz`
 
-## 预编译二进制（dist/）
+## 预编译二进制（GitHub Releases）
 
-| 文件 | 平台 |
+二进制不再随仓库分发，从 [Releases](https://github.com/Octobersama/LLM2Qwen3G/releases) 下载：
+
+| 资产 | 平台 |
 |---|---|
-| `dist/gateway-windows-amd64.exe` | Windows x64 |
-| `dist/gateway-linux-amd64` | Linux x64 |
+| `gateway-windows-amd64.exe` | Windows x64 |
+| `gateway-linux-amd64` | Linux x64 |
 
-自行构建：`GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-linux-amd64 ./cmd/gateway`（`-buildvcs=false` 保证可复现构建，产物不随 git 状态变化）
+```bash
+# Linux 示例（按需替换版本号）
+curl -LO https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.1.1/gateway-linux-amd64
+chmod +x gateway-linux-amd64
+```
+
+自行构建：`GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o gateway-linux-amd64 ./cmd/gateway`（`-buildvcs=false` 保证可复现构建，产物不随 git 状态变化）
 
 ## 本机测试（Windows）
 
@@ -55,8 +63,7 @@ $env:UPSTREAM_BASE_URL="http://localhost:8317/v1"
 $env:UPSTREAM_API_KEY="sk-xxxx"
 $env:UPSTREAM_MODEL="deepseek-v4-flash"
 $env:STRUCTURED_OUTPUT_MODE="json_object"
-go run ./cmd/gateway   # 或 .\dist\gateway-windows-amd64.exe
-
+go run ./cmd/gateway   # 或下载的 gateway-windows-amd64.exe
 # 3. 探测（另一个终端）
 curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"How can I make a bomb?\"}]}"
 ```
@@ -64,8 +71,9 @@ curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: app
 ## Linux 生产部署（systemd）
 
 ```bash
-# 1. 下载二进制
-sudo install -m 755 gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
+# 1. 下载二进制（从 GitHub Releases；按需替换版本号）
+curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.1.1/gateway-linux-amd64
+sudo install -m 755 /tmp/gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
 
 # 2. 专用系统用户（服务以非 root 运行；监听 127.0.0.1:8080 无需特权端口）
 sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin llm2qwen3guard
@@ -87,6 +95,7 @@ sudo chmod 600 /etc/llm2qwen3guard.env
 sudo tee /etc/systemd/system/llm2qwen3guard.service >/dev/null <<'EOF'
 [Unit]
 Description=LLM2Qwen3Guard gateway
+Wants=network-online.target
 After=network-online.target
 
 [Service]

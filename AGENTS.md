@@ -37,7 +37,7 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 | `internal/qwen3guard/` | 纯域包（无 net/http）：`contract.go` 官方 token/别名映射/校验/渲染/PromptSystemPolicy；`extract.go` 消息抽取；`jsonpayload.go` 宽容 JSON 解析 |
 | `internal/upstream/` | OpenAI 兼容上游客户端：降级链、`endpointURL`（base 路径原样保留）、256KiB 响应上限、`UpstreamError{Status,Mode}` |
 | `internal/server/` | HTTP 编排：路由/鉴权/请求体大小限制/截断/失败策略/SSE |
-| `dist/` | **有意提交**的跨平台发布二进制（gateway-linux-amd64、gateway-windows-amd64.exe） |
+| （无 dist/） | 二进制不入库；经 [GitHub Releases](https://github.com/Octobersama/LLM2Qwen3G/releases) 分发（v0.1.1+），本地构建走 `-buildvcs=false` |
 | `_research/` | gitignore 的调研原始快照（sub2api 源码、智谱 OpenAPI、HF chat_template）——勿删勿提交 |
 | `DESIGN.md` | 带出处的协议合同（改动协议前必读） |
 
@@ -47,9 +47,9 @@ cmd/gateway ──► internal/server ──► internal/upstream ──► inte
 go run ./cmd/gateway          # 本地运行（需环境变量，见 .env.example；网关不读取 .env 文件本身）
 go vet ./... && go test ./... # 静态检查 + 全量测试（改代码后必跑）
 
-# 发布二进制（提交进 dist/；-buildvcs=false 保证可复现）
-GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-windows-amd64.exe ./cmd/gateway
-GOOS=linux   GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o dist/gateway-linux-amd64   ./cmd/gateway
+# 发布二进制（构建到临时目录并上传 GitHub Releases；-buildvcs=false 保证可复现）
+GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /tmp/release/gateway-windows-amd64.exe ./cmd/gateway
+GOOS=linux   GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /tmp/release/gateway-linux-amd64   ./cmd/gateway
 
 # 冒烟探测
 curl -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" \
@@ -100,4 +100,4 @@ gofmt 是唯一格式器：提交前 `gofmt -l .` 必须为空。
 ## 提交纪律
 
 - `测试api key信息.txt`（真实 key）与 `_research/` 永不入库；提交前 `git status --short` 自查。
-- 改协议相关代码（token/渲染/解析/降级）必须：更新 `DESIGN.md` 对应结论 + 出处 → 跑全量测试 → 重建 `dist/` 两份二进制一并提交。
+- 改协议相关代码（token/渲染/解析/降级）必须：更新 `DESIGN.md` 对应结论 + 出处 → 跑全量测试 → 新版本构建双平台二进制发布到 GitHub Releases（打 tag `vX.Y.Z`），不提交进仓库。
