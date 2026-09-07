@@ -98,7 +98,7 @@
 
 验收标准：
 - [x] 终验全过：gofmt 空 / vet 零告警 / 全量测试绿 / 真实千问 3 探测（jailbreak→Unsafe/Jailbreak、破解→Unsafe/Non-violent Illegal Acts、睡前故事→Safe/None）/ audit 事件落盘 14 条
-- [x] `git status` 干净、已推送（整改主体 `b56d70d` + 计划终稿 `32a2d78` 均在远端 main；以 git log / 远端状态为准，不在此写死后续 hash）
+- [x] `git status` 干净、整改已推送至远端 main（以 git log / 远端状态核验，不在此固定具体提交）
 - [x] REVIEW-PLAN.md 所有框勾选（本项即此动作）
 ---
 
