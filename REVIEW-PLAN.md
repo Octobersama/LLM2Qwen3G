@@ -75,7 +75,7 @@
 ### Phase 3 — 测试噪音消除 + stdout 日志确定性（B5/B8）
 
 步骤：
-1. `server_test.go`：测试助手统一构造 `logsys.New("", "error")` logger 传入（或提取 `testLogger(t)` helper），消除 stdout audit 噪音
+1. `server_test.go`：测试助手统一注入静默 logger（实施修订：原方案 `logsys.New("", "error")` 不足——ERROR 级 `audit_failed` 事件仍会打到 stdout；最终实现为 `logsys.NewDiscard()` 全静默构造器 + `testLogger(t)` helper）
 2. `server.New` 注释修正：nil → "installs a stdout-only default logger"（如实）
 3. `logsys.Log`：stdout 行字段按 key 排序（`slices.Sort(keys)`），与 JSON sink 顺序一致
 4. `logsys_test.go` 补确定性断言（两次 Log 同字段 → stdout 行字节一致）
@@ -98,7 +98,7 @@
 
 验收标准：
 - [x] 终验全过：gofmt 空 / vet 零告警 / 全量测试绿 / 真实千问 3 探测（jailbreak→Unsafe/Jailbreak、破解→Unsafe/Non-violent Illegal Acts、睡前故事→Safe/None）/ audit 事件落盘 14 条
-- [ ] `git status` 干净、已推送 ——（提交动作见下）
+- [x] `git status` 干净、已推送（commit `b56d70d` → main，工作区 CLEAN）
 - [x] REVIEW-PLAN.md 所有框勾选（本项即此动作）
 ---
 
