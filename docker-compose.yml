@@ -25,8 +25,15 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
+    # 显式确保容器内监听 :8080（与 ports 映射和 -healthcheck 默认一致；
+    # .env 里的 LISTEN_ADDR 会覆盖此值，勿在 .env 里再设置）
+    environment:
+      LISTEN_ADDR: ":8080"
     # 与 README 的 systemd 加固对齐的容器级限制
     read_only: true
+    # read_only 根文件系统下，Go/TLS 运行时需要可写 /tmp（对应 systemd 的 PrivateTmp）
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
     cap_drop:
       - ALL
     security_opt:
