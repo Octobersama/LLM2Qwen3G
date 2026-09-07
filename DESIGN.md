@@ -74,6 +74,10 @@ Refusal: Yes
 
 不发明任何类目；政策文本与 [GT] README、技术报告 §2 一致，可互证。
 
+### 1.6 运营者审查侧重附录（AUDIT_POLICY_APPEND_FILE）
+
+`AUDIT_POLICY_APPEND_FILE` 指向文本文件，内容作为「Additional audit focus」插入 §1.5 结构的第 2 部分（官方政策定义）与第 3 部分（JSON 输出指令）**之间**；JSON 指令固定末尾，appendix 无法顶掉。语义边界：appendix 是任意运营者文本，**可改变判定侧重与宽严**（既可能收紧也可能放宽），但**不能改变对外合同**——safety 枚举与官方 9 类目由本地 `ValidateVerdict` 强制（§3.2 第 3 条），越界输出判无效走失败策略。文件缺失/不可读 → 启动失败（fail-fast）。示例见 `policy-appendix.example.txt`。
+
 ---
 
 ## 2. sub2api 解析合同（网关对外的消费方）
@@ -152,21 +156,23 @@ sub2api 只做 prompt-input 审计（feature spec 名就叫 prompt-input-audit�
   "type": "object",
   "properties": {
     "safety": {"type": "string", "enum": ["Safe", "Unsafe", "Controversial"]},
-    "categories": {"type": "array", "items": {"type": "string", "enum": ["Violent","Non-violent Illegal Acts","Sexual Content or Sexual Acts","PII","Suicide & Self-Harm","Unethical Acts","Politically Sensitive Topics","Copyright Violation","Jailbreak"]}, "uniqueItems": true}
+    "categories": {"type": "array", "items": {"type": "string", "enum": ["Violent","Non-violent Illegal Acts","Sexual Content or Sexual Acts","PII","Suicide & Self-Harm","Unethical Acts","Politically Sensitive Topics","Copyright Violation","Jailbreak"]}}
   },
   "required": ["safety", "categories"],
   "additionalProperties": false
 }
 ```
 
+**categories 数组不带 `uniqueItems`**（2026-09-07 实测修订）：千问 DashScope（`https://dashscope.aliyuncs.com/compatible-mode/v1`，qwen-flash）对数组类型携带 `uniqueItems` 的 schema 返回 400——报错原文：`InternalError.Algo.InvalidParameter: Format error : 'response_format.json_schema.schema'. ... When the schema contains the fields "uniqueItems", "contains", "minContains", or "maxContains", the type should not be "array"`。去重由本地 `NormalizeUpstreamCategories` 强制（§3.2 第 3 条），schema 层约束本就冗余；OpenRouter/SiliconFlow 的标准 JSON Schema 均接受无 `uniqueItems` 的数组，删除无兼容性损失。回归测试：`upstream_test.go` 断言 categories schema 不含 `uniqueItems`。
+
 （未实现）response 模式曾计划的 schema 扩展——加 `"refusal": {"type":"string","enum":["Yes","No"]}` 并从 categories 枚举去掉 `Jailbreak`——随 §2.4 的结论一并搁置，仅留作记录；当前实现只有上述 prompt schema。
 
 ---
 
-## 4. 网关对外接口（OpenAI 兼容）
 - 文本抽取：取 **最后一条 user 消息**（固定，见 §2.4）。content 为字符串或 OpenAI content 数组（拼接 text 部件）。多轮历史不作为上游上下文（sub2api 主场景只发单条 user 消息；官方模板仅用于 Qwen3Guard 自己的输入渲染，本网关不复刻模板——非目标）。
-- `POST /v1/chat/completions`：接受标准 chat body（model 忽略；messages 必填；`stream` 支持——按 SSE 返回 chat.completion.chunk：role 帧 + 全量 content 帧 + `[DONE]`，因为审计结果是整体产出的）。
-- `GET /healthz`：健康检查。sub2api 不调 `/v1/models`，不实现。
+- 可选审查侧重附录：`AUDIT_POLICY_APPEND_FILE`（见 §1.6）。
+- 审计日志（`internal/logsys`）：每请求双通道记录——stdout 常开（Docker/journald 消费）+ 文件 `LOG_DIR`（默认 `logs`，按日轮转 JSONL；`off` 关闭，Docker read-only 场景用）。字段白名单：request_id/text_chars/stream/model/base_url/api_key(**Redact 脱敏**)/mode/status/latency_ms/safety/categories；**绝不记录**待审文本、messages、上游原始 JSON、appendix 内容。`LOG_LEVEL`=debug|info|warn|error（默认 info）。
+- 失败响应对外**固定文案** "guard pipeline failure"——上游响应体（内嵌于 `UpstreamError`）绝不透给调用方（非目标）。
 - 可选 `GATEWAY_API_KEY`：设置后校验 `Authorization: Bearer`（sub2api 节点配 token 时会带上）。
 - 超长输入：`MAX_INPUT_CHARS` 截断（默认 32000 > sub2api 默认分块 4000；0=不限制），日志告警。
 
