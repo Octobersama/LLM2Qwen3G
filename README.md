@@ -75,8 +75,9 @@ curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: app
 curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.1/gateway-linux-amd64
 sudo install -m 755 /tmp/gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
 
-# 2. 专用系统用户（服务以非 root 运行；监听 127.0.0.1:8080 无需特权端口）
-sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin llm2qwen3guard
+# 2. 专用系统用户与同名组（--user-group 确保 Group=llm2qwen3guard 存在；
+#    useradd --system 默认是否建组取决于 USERGROUPS_ENAB，跨发行版不保证）
+sudo useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin llm2qwen3guard
 
 # 3. 日志目录：无需手工创建——下方 unit 的 LogsDirectory=llm2qwen3guard 会让
 #    systemd 启动时在 /var/log/llm2qwen3guard 创建目录并把属主设为服务用户，
@@ -131,10 +132,13 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now llm2qwen3guard
 
-# 6. 验证
+# 6. 验证（健康接口 + 双日志通道；文件日志出现即证明 LogsDirectory + LOG_DIR 链路通）
 curl -s http://127.0.0.1:8080/healthz
-journalctl -u llm2qwen3guard -f          # stdout 通道
-sudo tail -f /var/log/llm2qwen3guard/gateway-*.jsonl   # 文件通道
+journalctl -u llm2qwen3guard -f                            # stdout 通道
+curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"any","messages":[{"role":"user","content":"ping"}]}'
+sudo ls -la /var/log/llm2qwen3guard/                       # 应出现 gateway-YYYYMMDD.jsonl
+sudo tail -f /var/log/llm2qwen3guard/gateway-*.jsonl       # 文件通道
 ```
 
 ## Docker 部署（推荐给其他用户）
