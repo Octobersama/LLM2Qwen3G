@@ -74,8 +74,11 @@ func TestLoggerFileSinkAndRotationFields(t *testing.T) {
 }
 
 func TestStdoutFieldOrderDeterministic(t *testing.T) {
-	// Two loggers with identical events must render byte-identical stdout
-	// lines despite map iteration order being random.
+	// Two loggers with identical events must render field sections
+	// byte-identically despite map iteration order being random. The
+	// leading RFC3339 timestamp is EXCLUDED from comparison — it is
+	// time.Now()-derived, so a second boundary between the two calls would
+	// flake the test.
 	var a, b strings.Builder
 	for _, w := range []*strings.Builder{&a, &b} {
 		l := &Logger{stdout: w, minLevel: LevelInfo}
@@ -86,11 +89,19 @@ func TestStdoutFieldOrderDeterministic(t *testing.T) {
 			"text_chars": 3,
 		})
 	}
-	if a.String() == "" || a.String() != b.String() {
-		t.Fatalf("stdout lines not deterministic:\n%q\n%q", a.String(), b.String())
+	fieldsOf := func(line string) string {
+		// "2006-01-02T15:04:05+08:00 INFO audit <fields...>" -> "<fields...>"
+		if i := strings.IndexByte(line, ' '); i >= 0 {
+			return line[i+1:]
+		}
+		return line
 	}
-	if !strings.Contains(a.String(), "api_key=sk-xxxx…yyyy base_url=u") {
-		t.Fatalf("fields not sorted: %q", a.String())
+	fa, fb := fieldsOf(a.String()), fieldsOf(b.String())
+	if fa == "" || fa != fb {
+		t.Fatalf("stdout field sections not deterministic:\n%q\n%q", fa, fb)
+	}
+	if !strings.Contains(fa, "api_key=sk-xxxx…yyyy base_url=u") {
+		t.Fatalf("fields not sorted: %q", fa)
 	}
 }
 
