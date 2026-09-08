@@ -45,8 +45,8 @@ PowerShell 用 `$env:UPSTREAM_BASE_URL="..."`（完整示例见下文「本机�
 | `gateway-linux-amd64` | Linux x64 |
 
 ```bash
-# Linux 示例（按需替换版本号，当前 v0.2.0）
-curl -LO https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.0/gateway-linux-amd64
+# Linux 示例（按需替换版本号，当前 v0.2.1）
+curl -LO https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.1/gateway-linux-amd64
 chmod +x gateway-linux-amd64
 ```
 
@@ -72,13 +72,18 @@ curl.exe -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: app
 
 ```bash
 # 1. 下载二进制（从 GitHub Releases；按需替换版本号）
-curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.0/gateway-linux-amd64
+curl -fL -o /tmp/gateway-linux-amd64 https://github.com/Octobersama/LLM2Qwen3G/releases/download/v0.2.1/gateway-linux-amd64
 sudo install -m 755 /tmp/gateway-linux-amd64 /usr/local/bin/llm2qwen3guard
 
 # 2. 专用系统用户（服务以非 root 运行；监听 127.0.0.1:8080 无需特权端口）
 sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin llm2qwen3guard
 
-# 3. 配置（/etc/llm2qwen3guard.env，权限 600 属 root，服务经 systemd EnvironmentFile 读取）
+# 3. 日志目录：无需手工创建——下方 unit 的 LogsDirectory=llm2qwen3guard 会让
+#    systemd 启动时在 /var/log/llm2qwen3guard 创建目录并把属主设为服务用户，
+#    且与 ProtectSystem=strict 只读根协同（该目录自动可写）。本机无 Linux
+#    systemd 环境，此为 systemd 官方 LogsDirectory 语义，未实测；遇到问题请提 issue。
+
+# 4. 配置（/etc/llm2qwen3guard.env，权限 600 属 root，服务经 systemd EnvironmentFile 读取）
 sudo tee /etc/llm2qwen3guard.env >/dev/null <<'EOF'
 LISTEN_ADDR=127.0.0.1:8080
 UPSTREAM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
@@ -88,10 +93,12 @@ STRUCTURED_OUTPUT_MODE=json_object
 UPSTREAM_EXTRA_BODY_JSON={"thinking":{"type":"disabled"}}
 UPSTREAM_TIMEOUT_SECONDS=120
 FAILURE_POLICY=error
+LOG_DIR=/var/log/llm2qwen3guard
 EOF
 sudo chmod 600 /etc/llm2qwen3guard.env
 
-# 4. systemd 服务（非 root + 加固）
+# 5. systemd 服务（非 root + 加固；LogsDirectory 声明日志目录并由 systemd 授权，
+#    与 ProtectSystem=strict 兼容——它等价于 ReadWritePaths 该目录 + 属主设为服务用户）
 sudo tee /etc/systemd/system/llm2qwen3guard.service >/dev/null <<'EOF'
 [Unit]
 Description=LLM2Qwen3Guard gateway
@@ -105,7 +112,9 @@ EnvironmentFile=/etc/llm2qwen3guard.env
 ExecStart=/usr/local/bin/llm2qwen3guard
 Restart=on-failure
 RestartSec=3
-# 加固：无新特权 / 只读文件系统（可写 /tmp 独立挂载）/ 私有 tmp / 禁止设备与内核指针访问
+# 日志目录：systemd 启动时创建/授权（等价 ReadWritePaths，与只读根协同）
+LogsDirectory=llm2qwen3guard
+# 加固：无新特权 / 只读文件系统 / 私有 tmp / 禁止设备与内核指针访问
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
@@ -122,9 +131,10 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now llm2qwen3guard
 
-# 5. 验证
+# 6. 验证
 curl -s http://127.0.0.1:8080/healthz
-journalctl -u llm2qwen3guard -f
+journalctl -u llm2qwen3guard -f          # stdout 通道
+sudo tail -f /var/log/llm2qwen3guard/gateway-*.jsonl   # 文件通道
 ```
 
 ## Docker 部署（推荐给其他用户）
