@@ -132,13 +132,14 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now llm2qwen3guard
 
-# 6. 验证（健康接口 + 双日志通道；文件日志出现即证明 LogsDirectory + LOG_DIR 链路通）
+# 6. 验证（先非阻塞命令；journalctl -f / tail -f 会前台阻塞，放最后单独执行）
 curl -s http://127.0.0.1:8080/healthz
-journalctl -u llm2qwen3guard -f                            # stdout 通道
 curl -s -X POST http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"any","messages":[{"role":"user","content":"ping"}]}'
-sudo ls -la /var/log/llm2qwen3guard/                       # 应出现 gateway-YYYYMMDD.jsonl
-sudo tail -f /var/log/llm2qwen3guard/gateway-*.jsonl       # 文件通道
+  -d '{"model":"any","messages":[{"role":"user","content":"ping"}]}'   # 需已配置有效上游
+sudo ls -la /var/log/llm2qwen3guard/            # 应出现 gateway-YYYYMMDD.jsonl（LogsDirectory+LOG_DIR 链路证明）
+journalctl -u llm2qwen3guard -n 20              # stdout 通道最近 20 行（非阻塞）
+# 可选：实时跟踪（Ctrl-C 退出）
+# sudo tail -f /var/log/llm2qwen3guard/gateway-*.jsonl
 ```
 
 ## Docker 部署（推荐给其他用户）
