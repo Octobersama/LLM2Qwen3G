@@ -8,10 +8,8 @@ import (
 )
 
 // validEnv sets the required trio plus safe defaults for a successful parse.
-// It also clears every optional variable so tests are deterministic even when
-// the host/CI environment pre-sets them (t.Setenv only overrides what a test
-// explicitly sets; without this, TestDefaultsAndOverrides could observe host
-// values instead of code defaults).
+// It clears every optional variable to isolate tests from host/CI
+// environment presets (empty value makes FromEnv apply the default).
 func validEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{

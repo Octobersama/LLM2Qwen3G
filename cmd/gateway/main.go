@@ -20,10 +20,12 @@ import (
 
 func main() {
 	// -healthcheck performs a one-shot GET /healthz against the raw
-	// LISTEN_ADDR env value (default ":8080", host part forced to 127.0.0.1)
-	// and exits 0/1. Used by container health probes: the distroless runtime
-	// image ships no shell/curl/wget. It reads LISTEN_ADDR directly and does
-	// NOT run config.FromEnv, so it also works with missing upstream vars.
+	// LISTEN_ADDR env value (default ":8080"; an EMPTY host defaults to
+	// 127.0.0.1 — explicit hosts like 0.0.0.0/[::] are preserved as given,
+	// see healthzURL) and exits 0/1. Used by container health probes: the
+	// distroless runtime image ships no shell/curl/wget. It reads LISTEN_ADDR
+	// directly and does NOT run config.FromEnv, so it also works with
+	// missing upstream vars.
 	healthcheck := flag.Bool("healthcheck", false, "probe GET /healthz on LISTEN_ADDR and exit")
 	flag.Parse()
 	if *healthcheck {

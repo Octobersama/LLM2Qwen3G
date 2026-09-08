@@ -38,6 +38,10 @@ func TestHealthzURL(t *testing.T) {
 		":9000":        "http://127.0.0.1:9000/healthz",
 		"127.0.0.1:80": "http://127.0.0.1:80/healthz",
 		"[::1]:8080":   "http://[::1]:8080/healthz",
+		// Explicit wildcard hosts are PRESERVED (only an empty host defaults
+		// to loopback) — pins the documented healthzURL behavior.
+		"0.0.0.0:8080": "http://0.0.0.0:8080/healthz",
+		"[::]:8080":    "http://[::]:8080/healthz",
 	}
 	for addr, want := range cases {
 		got, err := healthzURL(addr)
