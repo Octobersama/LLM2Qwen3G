@@ -14,7 +14,7 @@
 | B2 | 高 | `server.go` | `verdict = Safety + "/" + join(...)` 打包成字符串，defer 里 `splitVerdict` 再解包——把结构化数据压扁又拆开，纯属往返浪费 | 直接持有 safety/categories 两个变量；删除 `splitVerdict` |
 | B3 | 中 | `server.go failure()` | `fields["request_id"].(string)` 类型断言——内部契约靠 map 断言，未来调用方漏放即 panic | request_id 改显式参数传递 |
 | B4 | 中 | `server.go writeCompletion()` | SSE 注释断言 "sub2api's OpenAI clients expect the stop marker" 无出处（此前审查已指出过一次未修），违反本仓库"注释必须指认真实出处"纪律 | 改述为 OpenAI 官方 streaming 合同（不点名 sub2api），或直接删除断言子句 |
-| B5 | 中 | `server_test.go` 全部 + `server.New` 注释 | ① 所有测试传 `nil` logger → server.New 静默装 stdout info logger → 每个测试请求向 stdout 打 audit 行（噪音污染测试输出）；② `New` 注释称 "logger may be nil (logging disabled)" 与实际（nil = stdout 默认，非禁用）矛盾 | 测试助手统一传 `logsys.New("", "error")`（level 过滤掉 info）；修正注释如实描述 |
+| B5 | 中 | `server_test.go` 全部 + `server.New` 注释 | ① 所有测试传 `nil` logger → server.New 静默装 stdout info logger → 每个测试请求向 stdout 打 audit 行（噪音污染测试输出）；② `New` 注释称 "logger may be nil (logging disabled)" 与实际（nil = stdout 默认，非禁用）矛盾 | ~~测试助手统一传 `logsys.New("", "error")`（level 过滤掉 info）~~ 原方案（见 Phase 3 实施修订）：最终实现为 `logsys.NewDiscard()`；修正注释如实描述 |
 | B6 | 中 | `config.go:11-12` | 注释称 "Environment names and defaults are defined by DESIGN.md section 4/5"——DESIGN §4/§5 并不包含 env 清单/默认值表（README 配置表与 `.env.example` 才是）——注释指向不存在的权威 | 改指 README 配置表 + `.env.example` |
 | B7 | 中 | `internal/config`（AGENTS.md 自我声明缺口） | config 包零测试：必填三项、枚举拒绝、数值边界、appendix fail-fast、LOG_DIR 校验全是行为，仓库 AGENTS.md 自己标注"改动相关区域时补"——本次就是改动区域 | 新增 `config_test.go` 覆盖上述每一分支 |
 | B8 | 低 | `logsys.Log()` stdout 行 | map 迭代无序 → stdout key=value 字段顺序随机（JSON 文件 sink 因 encoding/json 排序 key 是稳定的）——journalctl/docker logs 里 grep/对比困难 | stdout 行按字段名排序输出，两 sink 字段顺序一致 |
@@ -79,7 +79,7 @@
 2. `server.New` 注释修正：nil → "installs a stdout-only default logger"（如实）
 3. `logsys.Log`：stdout 行字段按 key 排序（`slices.Sort(keys)`），与 JSON sink 顺序一致
 4. `logsys_test.go` 补确定性断言（两次 Log 同字段 → stdout 行字节一致）
-5. AGENTS.md 同步：Testing 一节移除 "internal/config 无测试" 缺口条目；补 server 测试注入 level=error logger 的惯例
+5. AGENTS.md 同步：Testing 一节移除 "internal/config 无测试" 缺口条目；补 server 测试注入静默 logger 的惯例（~~level=error~~ 原表述，最终为 `NewDiscard()`，同步骤 1 修订）
 
 验收标准：
 - [x] `go test ./internal/server/ -v 2>&1 | grep -cE 'msg=audit|audit_failed'` = 0（修订记录：原稿只查 `msg=audit`，会漏 ERROR 级 `audit_failed` 噪音——检查已扩为两者；实现也从 level 过滤改为 `logsys.NewDiscard()` 全静默构造器，附行为测试 TestNewDiscardIsSilent）
