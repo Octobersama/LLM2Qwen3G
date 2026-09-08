@@ -8,8 +8,21 @@ import (
 )
 
 // validEnv sets the required trio plus safe defaults for a successful parse.
+// It also clears every optional variable so tests are deterministic even when
+// the host/CI environment pre-sets them (t.Setenv only overrides what a test
+// explicitly sets; without this, TestDefaultsAndOverrides could observe host
+// values instead of code defaults).
 func validEnv(t *testing.T) {
 	t.Helper()
+	for _, name := range []string{
+		"LISTEN_ADDR", "UPSTREAM_TIMEOUT_SECONDS", "UPSTREAM_MAX_TOKENS",
+		"UPSTREAM_TEMPERATURE", "STRUCTURED_OUTPUT_MODE",
+		"UPSTREAM_JSON_SCHEMA_STRICT", "UPSTREAM_EXTRA_BODY_JSON",
+		"MAX_INPUT_CHARS", "MAX_REQUEST_BYTES", "AUDIT_POLICY_APPEND_FILE",
+		"LOG_LEVEL", "FAILURE_POLICY", "GATEWAY_API_KEY",
+	} {
+		t.Setenv(name, "")
+	}
 	t.Setenv("UPSTREAM_BASE_URL", "https://api.example.com/v1")
 	t.Setenv("UPSTREAM_API_KEY", "sk-test")
 	t.Setenv("UPSTREAM_MODEL", "m")

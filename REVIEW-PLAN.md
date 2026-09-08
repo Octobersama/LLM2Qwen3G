@@ -79,7 +79,7 @@
 2. `server.New` 注释修正：nil → "installs a stdout-only default logger"（如实）
 3. `logsys.Log`：stdout 行字段按 key 排序（`slices.Sort(keys)`），与 JSON sink 顺序一致
 4. `logsys_test.go` 补确定性断言（两次 Log 同字段 → stdout 行字节一致）
-5. AGENTS.md 同步：Testing 一节移除 "internal/config 无测试" 缺口条目；补 server 测试注入静默 logger 的惯例（~~level=error~~ 原表述，最终为 `NewDiscard()`，同步骤 1 修订）
+5. AGENTS.md 同步：Testing 一节移除 "internal/config 无测试" 缺口条目；补 server 测试注入 `logsys.NewDiscard()` 静默 logger 的惯例（历史注记：原稿写 level=error，因 ERROR 级 `audit_failed` 仍会输出而改为 NewDiscard，同步骤 1）
 
 验收标准：
 - [x] `go test ./internal/server/ -v 2>&1 | grep -cE 'msg=audit|audit_failed'` = 0（修订记录：原稿只查 `msg=audit`，会漏 ERROR 级 `audit_failed` 噪音——检查已扩为两者；实现也从 level 过滤改为 `logsys.NewDiscard()` 全静默构造器，附行为测试 TestNewDiscardIsSilent）
